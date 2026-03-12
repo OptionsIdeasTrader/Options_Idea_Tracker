@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Options Learning Platform</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.7/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;background:#f4f4f4;}
+    input,select,textarea,button{font-family:inherit;}
+    ::-webkit-scrollbar{width:8px;height:8px;}
+    ::-webkit-scrollbar-track{background:#f0f0f0;}
+    ::-webkit-scrollbar-thumb{background:#bbb;border-radius:4px;}
+    @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+window.__SB_URL__  = "https://efsgzcvktaowwlqsidnk.supabase.co";
+window.__SB_ANON__ = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmc2d6Y3ZrdGFvd3dscXNpZG5rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzMzIwNzUsImV4cCI6MjA4ODkwODA3NX0.nRd58ZhWpAcX8qCsjuVqptvgmbcrptY9HDEPA-e89ro";
+</script>
+<script type="module">
+const html = htm.bind(React.createElement);
+const { useState, useEffect, useCallback, useRef } = React;
+
+const sb = window.supabase.createClient(window.__SB_URL__, window.__SB_ANON__);
+
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const F = {
+  green:"#267C2C", greenDark:"#1a5c20", greenLight:"#e8f5e9", greenBorder:"#b2dfb4",
+  white:"#ffffff", bgPage:"#f4f4f4", bgPanel:"#ffffff",
+  bgHeader:"#1C2B39", bgSubHeader:"#2E4459", bgBanner:"#0d1821",
+  borderLight:"#d0d0d0", borderMid:"#b0b0b0",
+  textPrimary:"#1a1a1a", textSecond:"#555555", textMuted:"#888888", textWhite:"#ffffff",
+  red:"#CC0000", redLight:"#fff0f0",
+  blueLink:"#0A6FBA", blueLinkLight:"#eff6ff",
+  rowHover:"#f0f7f0", rowAlt:"#fafafa",
+  gold:"#B8860B", goldLight:"#fff8e1",
+  purple:"#6D28D9", purpleLight:"#ede9fe", purpleBorder:"#c4b5fd",
+  indigo:"#3730A3", indigoLight:"#f5f3ff", indigoBorder:"#c7d2fe",
+};
+
+// ─── Strategies ───────────────────────────────────────────────────────────────
+const STRATEGY_DEFS = [
+  {name:"Covered Call",type:"sell",margin:false},
+  {name:"Cash-Secured Put",type:"sell",margin:false},
+  {name:"Bull Put Spread",type:"sell",margin:false},
+  {name:"Bear Call Spread",type:"sell",margin:false},
+  {name:"Iron Condor",type:"sell",margin:true},
+  {name:"Iron Butterfly",type:"sell",margin:true},
+  {name:"Straddle (Short)",type:"sell",margin:true},
+  {name:"Strangle (Short)",type:"sell",margin:true},
+  {name:"Jade Lizard",type:"sell",margin:true},
+  {name:"PMCC (Poor Man's Covered Call)",type:"sell",margin:false},
+  {name:"Diagonal Spread",type:"sell",margin:false},
+  {name:"Calendar Spread",type:"sell",margin:false},
+  {name:"Ratio Spread",type:"sell",margin:true},
+  {name:"Naked Put",type:"sell",margin:true},
+  {name:"Naked Call",type:"sell",margin:true},
+  {name:"Long Call",type:"buy",margin:false},
+  {name:"Long Put",type:"buy",margin:false},
+  {name:"Bull Call Spread",type:"buy",margin:false},
+  {name:"Bear Put Spread",type:"buy",margin:false},
+  {name:"Straddle (Long)",type:"buy",margin:false},
+  {name:"Strangle (Long)",type:"buy",margin:false},
+];
+const STRAT_MAP = Object.fromEntries(STRATEGY_DEFS.map(s=>[s.name,s]));
+const MARGIN_STRATS = STRATEGY_DEFS.filter(s=>s.margin).map(s=>s.name);
+const DIV_STRATS = ["Covered Call","Cash-Secured Put","PMCC (Poor Man's Covered Call)"];
+const ASSIGN_STRATS = ["Covered Call","Cash-Secured Put"];
+const STATUSES = ["Open","Closed","Expired","Rolled Out"];
+const STOCK_STATUSES = ["Holding","Sold","Assigned Away"];
+const STATUS_STYLE = {
+  Open:{color:F.green,bg:F.greenLight,border:F.greenBorder},
+  Closed:{color:"#555",bg:"#f0f0f0",border:"#ccc"},
+  Expired:{color:F.red,bg:F.redLight,border:"#ffb3b3"},
+  "Rolled Out":{color:F.gold,bg:F.goldLight,border:"#ffe08a"},
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const todayStr = () => new Date().toISOString().split("T")[0];
+const parseN = v => parseFloat(v)||0;
+const fmtD = n => "$"+Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const getDef = s => STRAT_MAP[s]||{type:"sell",margin:false};
+const optQty = t => 100*(parseInt(t.contracts)||1);
+const dte = d => !d?null:Math.ceil((new Date(d+"T23:59:59")-new Date())/86400000);
+const genCode = () => Math.random().toString(36).substring(2,8).toUpperCase();
+
+const rowToTrade = r => ({
+  id:r.id, ticker:r.ticker||"", strategy:r.strategy||"Covered Call",
+  expiry:r.expiry||"", strikeShort:r.strike_short?.toString()||"",
+  strikeLong:r.strike_long?.toString()||"", premium:r.premium?.toString()||"",
+  contracts:r.contracts?.toString()||"1", currentValue:r.current_value?.toString()||"",
+  status:r.status||"Open", openDate:r.open_date||"", closeDate:r.close_date||"",
+  stockPrice:r.stock_price?.toString()||"", costBasis:r.cost_basis?.toString()||"",
+  thesis:r.thesis||"", notes:r.notes||"",
+  divAmount:r.div_amount?.toString()||"", divExDate:r.div_ex_date||"",
+  divPayDate:r.div_pay_date||"", divCount:r.div_count?.toString()||"0",
+});
+const tradeToRow = (t,uid) => ({
+  user_id:uid, ticker:(t.ticker||"").toUpperCase(), strategy:t.strategy,
+  expiry:t.expiry||null, strike_short:parseN(t.strikeShort)||null,
+  strike_long:parseN(t.strikeLong)||null, premium:parseN(t.premium)||null,
+  contracts:parseInt(t.contracts)||1, current_value:parseN(t.currentValue)||null,
+  status:t.status, open_date:t.openDate||null, close_date:t.closeDate||null,
+  stock_price:parseN(t.stockPrice)||null, cost_basis:parseN(t.costBasis)||null,
+  thesis:t.thesis||null, notes:t.notes||null,
+  div_amount:parseN(t.divAmount)||null, div_ex_date:t.divExDate||null,
+  div_pay_date:t.divPayDate||null, div_count:parseInt(t.divCount)||0,
+  updated_at:new Date().toISOString(),
+});
+const rowToStock = r => ({
+  id:r.id, ticker:r.ticker||"", shares:r.shares?.toString()||"",
+  buyPrice:r.buy_price?.toString()||"", buyDate:r.buy_date||"",
+  currentPrice:r.current_price?.toString()||"", status:r.status||"Holding",
+  sellPrice:r.sell_price?.toString()||"", sellDate:r.sell_date||"", notes:r.notes||"",
+});
+const stockToRow = (s,uid) => ({
+  user_id:uid, ticker:(s.ticker||"").toUpperCase(), shares:parseInt(s.shares)||0,
+  buy_price:parseN(s.buyPrice)||null, buy_date:s.buyDate||null,
+  current_price:parseN(s.currentPrice)||null, status:s.status,
+  sell_price:parseN(s.sellPrice)||null, sell_date:s.sellDate||null, notes:s.notes||null,
+});
+
+// ─── Calculations ─────────────────────────────────────────────────────────────
+const calcOptionPnl = t => {
+  if (!t.premium||!t.currentValue) return null;
+  const diff = parseN(t.premium)-parseN(t.currentValue);
+  return getDef(t.strategy).type==="sell" ? diff*optQty(t) : -diff*optQty(t);
+};
+const calcMaxProfit = t => {
+  const q=optQty(t), prem=parseN(t.premium)*q;
+  if (t.strategy==="Covered Call"&&t.costBasis&&t.strikeShort)
+    return prem+(parseN(t.strikeShort)-parseN(t.costBasis))*q;
+  return prem;
+};
+const calcPctMax = t => {
+  if (getDef(t.strategy).type!=="sell"||!t.premium||!t.currentValue) return null;
+  const mp=calcMaxProfit(t); if (mp<=0) return null;
+  return ((parseN(t.premium)-parseN(t.currentValue))*optQty(t)/mp)*100;
+};
+const calcDivIncome = t => {
+  if (!t.divAmount||!t.divCount||parseInt(t.divCount)===0) return 0;
+  return parseN(t.divAmount)*parseInt(t.divCount)*optQty(t);
+};
+const calcYield = t => (!t.premium||!t.stockPrice)?null:(parseN(t.premium)/parseN(t.stockPrice))*100;
+const calcStockPnl = s => {
+  const shares=parseInt(s.shares)||0, cost=parseN(s.buyPrice)*shares;
+  if (!s.buyPrice||!shares) return null;
+  if (s.status==="Holding"&&s.currentPrice) return parseN(s.currentPrice)*shares-cost;
+  if ((s.status==="Sold"||s.status==="Assigned Away")&&s.sellPrice) return parseN(s.sellPrice)*shares-cost;
+  return null;
+};
+const calcOptBalImpact = trades => trades.reduce((s,t)=>{
+  if (!t.premium) return s;
+  const p=parseN(t.premium)*optQty(t), sell=getDef(t.strategy).type==="sell";
+  const cv=t.status==="Closed"&&t.currentValue?parseN(t.currentValue)*optQty(t):0;
+  return sell ? s+p-cv : s-p+cv;
+},0);
+const calcStkBalImpact = stocks => stocks.reduce((s,st)=>{
+  const shares=parseInt(st.shares)||0;
+  if (!st.buyPrice||!shares) return s;
+  let imp=-parseN(st.buyPrice)*shares;
+  if ((st.status==="Sold"||st.status==="Assigned Away")&&st.sellPrice) imp+=parseN(st.sellPrice)*shares;
+  return s+imp;
+},0);
+const calcTotalValue = (trades,stocks,startBal) => {
+  const start=parseN(startBal);
+  const optImp=calcOptBalImpact(trades), stkImp=calcStkBalImpact(stocks);
+  const divInc=trades.reduce((s,t)=>s+calcDivIncome(t),0);
+  const cash=start+optImp+stkImp+divInc;
+  const optMark=trades.filter(t=>t.status==="Open"&&t.currentValue).reduce((s,t)=>{
+    const cv=parseN(t.currentValue)*optQty(t);
+    return getDef(t.strategy).type==="sell"?s-cv:s+cv;
+  },0);
+  const stkMkt=stocks.filter(s=>s.status==="Holding"&&s.currentPrice)
+    .reduce((s,st)=>s+parseN(st.currentPrice)*(parseInt(st.shares)||0),0);
+  return {cash,optMark,stkMkt,total:cash+optMark+stkMkt,divInc,optImp,stkImp};
+};
+
+// ─── UI Atoms ─────────────────────────────────────────────────────────────────
+const inp = {width:"100%",border:`1px solid ${F.borderLight}`,borderRadius:3,padding:"5px 8px",fontSize:13,color:F.textPrimary,background:F.white,outline:"none"};
+const thS = {padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:F.textSecond,background:"#e8ede8",whiteSpace:"nowrap",borderBottom:`1px solid ${F.borderMid}`};
+const tdS = {padding:"8px 10px",fontSize:12,color:F.textPrimary,verticalAlign:"middle"};
+
+function FLabel({children}){return html`<div style=${{fontSize:12,color:F.textSecond,marginBottom:3,fontWeight:600}}>${children}</div>`;}
+function FField({label,value,onChange,type="text",placeholder,disabled,autoFocus}){
+  return html`<div><${FLabel}>${label}<//>
+    <input autoFocus=${autoFocus} type=${type} value=${value} onChange=${e=>onChange(e.target.value)} placeholder=${placeholder} style=${{...inp,opacity:disabled?0.6:1}} disabled=${disabled}/>
+  </div>`;
+}
+function FSelect({label,value,onChange,options}){
+  return html`<div><${FLabel}>${label}<//>
+    <select value=${value} onChange=${e=>onChange(e.target.value)} style=${inp}>
+      ${options.map(o=>html`<option key=${o}>${o}</option>`)}
+    </select>
+  </div>`;
+}
+function Spinner({size=16}){
+  return html`<span style=${{display:"inline-block",width:size,height:size,border:"2px solid rgba(255,255,255,0.2)",borderTop:`2px solid ${F.green}`,borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}}/>`;
+}
+function Modal({onClose,title,width=440,children,headerBg}){
+  return html`<div style=${{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div style=${{background:F.white,borderRadius:6,width,maxWidth:"100%",boxShadow:"0 8px 40px rgba(0,0,0,0.3)",overflow:"hidden"}}>
+      <div style=${{background:headerBg||F.bgHeader,color:"#fff",padding:"13px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style=${{fontWeight:700,fontSize:14}}>${title}</span>
+        ${onClose&&html`<button onClick=${onClose} style=${{background:"transparent",border:"1px solid rgba(255,255,255,0.35)",color:"#fff",borderRadius:3,padding:"3px 10px",fontSize:12,cursor:"pointer"}}>✕</button>`}
+      </div>
+      ${children}
+    </div>
+  </div>`;
+}
+function SecLabel({children,color}){
+  return html`<div style=${{fontSize:10,fontWeight:700,color:color||F.textMuted,textTransform:"uppercase",letterSpacing:1,marginBottom:8,borderBottom:`1px solid ${color?color+"44":F.borderLight}`,paddingBottom:4}}>${children}</div>`;
+}
+function SummaryItem({label,value,color,sub}){
+  return html`<div>
+    <div style=${{fontSize:11,color:F.textMuted,marginBottom:2,textTransform:"uppercase",letterSpacing:0.5}}>${label}</div>
+    <div style=${{fontSize:18,fontWeight:700,color:color||F.textPrimary}}>${value}</div>
+    ${sub&&html`<div style=${{fontSize:10,color:F.textMuted,marginTop:1}}>${sub}</div>`}
+  </div>`;
+}
+function ActionBtn({label,color,bg,onClick,disabled}){
+  return html`<button onClick=${onClick} disabled=${disabled} style=${{background:bg||"none",border:`1px solid ${color}`,color,borderRadius:3,padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:600,opacity:disabled?0.5:1}}>${label}</button>`;
+}
+
+// ─── P&L Cell ─────────────────────────────────────────────────────────────────
+function PnlCell({trade,onUpdate}){
+  const [edit,setEdit]=useState(false);
+  const [val,setVal]=useState(trade.currentValue||"");
+  const pnl=calcOptionPnl(trade), pctMax=calcPctMax(trade), mp=calcMaxProfit(trade);
+  const divInc=calcDivIncome(trade), total=(pnl||0)+divInc;
+  const col=pnl===null?"#aaa":pnl>=0?F.green:F.red;
+  return html`<div>
+    <div style=${{display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}}>
+      ${!edit?html`
+        <span style=${{fontWeight:700,color:col}}>${pnl===null?"—":`${pnl>=0?"+":"-"}${fmtD(pnl)}`}</span>
+        ${trade.status==="Open"&&html`<button onClick=${()=>{setVal(trade.currentValue||"");setEdit(true);}} style=${{background:"none",border:`1px solid ${F.borderLight}`,borderRadius:2,fontSize:10,color:F.blueLink,cursor:"pointer",padding:"1px 5px"}}>Edit</button>`}
+      `:html`
+        <input autoFocus value=${val} onChange=${e=>setVal(e.target.value)}
+          style=${{width:64,padding:"2px 5px",fontSize:12,border:`1px solid ${F.green}`,borderRadius:2,outline:"none"}}
+          onKeyDown=${e=>{if(e.key==="Enter"){onUpdate(trade.id,val);setEdit(false);}if(e.key==="Escape")setEdit(false);}}/>
+        <button onClick=${()=>{onUpdate(trade.id,val);setEdit(false);}} style=${{background:F.green,color:"#fff",border:"none",borderRadius:2,fontSize:10,cursor:"pointer",padding:"2px 6px"}}>✓</button>
+        <button onClick=${()=>setEdit(false)} style=${{background:"#fff",color:F.textMuted,border:`1px solid ${F.borderLight}`,borderRadius:2,fontSize:10,cursor:"pointer",padding:"2px 5px"}}>✕</button>
+      `}
+    </div>
+    ${pctMax!==null&&html`<div style=${{marginTop:3}}>
+      <div style=${{height:3,background:"#e0e0e0",borderRadius:2,width:80}}>
+        <div style=${{height:3,background:pctMax>=50?F.green:F.gold,borderRadius:2,width:`${Math.min(100,Math.max(0,pctMax))}%`}}/>
+      </div>
+      <div style=${{fontSize:10,color:F.textMuted,marginTop:1}}>${pctMax.toFixed(0)}% of ${fmtD(mp)} max</div>
+    </div>`}
+    ${divInc>0&&html`<div style=${{fontSize:10,color:F.purple,marginTop:2,fontWeight:600}}>💰 +${fmtD(divInc)} div</div>`}
+    ${divInc>0&&pnl!==null&&html`<div style=${{fontSize:11,fontWeight:700,color:total>=0?F.green:F.red,borderTop:`1px dashed ${F.borderLight}`,marginTop:2,paddingTop:2}}>Total: ${total>=0?"+":"-"}${fmtD(total)}</div>`}
+  </div>`;
+}
+
+// ─── Assignment Risk Panel ────────────────────────────────────────────────────
+function AssignmentRiskPanel({t}){
+  const strike=parseN(t.strikeShort), prem=parseN(t.premium);
+  if (!strike||!prem) return null;
+  const q=optQty(t), premTotal=prem*q, basis=parseN(t.costBasis)||null;
+  const isCsp=t.strategy==="Cash-Secured Put";
+  const assignProfit=basis?(isCsp?(strike-basis)*q*-1+premTotal:(strike-basis)*q+premTotal):null;
+  const breakEven=basis?basis-prem:null;
+  const effectiveCost=isCsp?strike-prem:null;
+  return html`<div style=${{background:F.indigoLight,border:`1px solid ${F.indigoBorder}`,borderRadius:4,overflow:"hidden"}}>
+    <div style=${{background:F.indigo,color:"#fff",padding:"7px 14px",fontSize:12,fontWeight:700}}>
+      ⚖️ Assignment Risk Simulator — ${t.ticker} · ${t.strategy} · Strike $${strike.toFixed(2)}
+    </div>
+    <div style=${{padding:"8px 14px 10px",fontSize:12}}>
+      <div style=${{marginBottom:6,fontWeight:600,color:F.textSecond}}>Scenario A — Expires Worthless:</div>
+      <div style=${{marginBottom:8,color:F.green}}>You keep full premium: +${fmtD(premTotal)}</div>
+      <div style=${{marginBottom:6,fontWeight:600,color:F.textSecond}}>Scenario B — Gets Assigned at $${strike.toFixed(2)}:</div>
+      ${isCsp?html`
+        <div>You buy shares at strike: -${fmtD(strike*q)}</div>
+        ${effectiveCost&&html`<div style=${{color:F.blueLink,fontWeight:700}}>Effective cost/share: $${effectiveCost.toFixed(2)} (after premium)</div>`}
+      `:html`
+        <div>Shares sold at strike: +${fmtD(strike*q)}</div>
+        ${assignProfit!==null&&html`<div style=${{color:assignProfit>=0?F.green:F.red,fontWeight:700}}>Net profit: ${assignProfit>=0?"+":"-"}${fmtD(assignProfit)}</div>`}
+        ${breakEven!==null&&html`<div style=${{color:F.gold}}>Break-even: $${breakEven.toFixed(2)}/share</div>`}
+      `}
+    </div>
+  </div>`;
+}
+
+// ─── Trade Form ───────────────────────────────────────────────────────────────
+function TradeForm({initial,onSave,onCancel,saving}){
+  const blank={id:null,ticker:"",strategy:"Covered Call",expiry:"",strikeShort:"",strikeLong:"",premium:"",contracts:"1",currentValue:"",status:"Open",openDate:todayStr(),closeDate:"",stockPrice:"",costBasis:"",thesis:"",notes:"",divAmount:"",divExDate:"",divPayDate:"",divCount:""};
+  const [f,setF]=useState(initial||blank);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const def=getDef(f.strategy),isBuy=def.type==="buy",isEdit=!!f.id;
+  const showDiv=DIV_STRATS.includes(f.strategy),showAssign=ASSIGN_STRATS.includes(f.strategy);
+  const premTotal=f.premium&&f.contracts?(parseN(f.premium)*100*parseInt(f.contracts)).toFixed(2):null;
+  const yld=f.premium&&f.stockPrice?((parseN(f.premium)/parseN(f.stockPrice))*100).toFixed(2):null;
+  return html`<div style=${{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:1500,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:28,overflowY:"auto"}}>
+    <div style=${{background:F.white,borderRadius:6,width:820,boxShadow:"0 8px 40px rgba(0,0,0,0.25)",overflow:"hidden",marginBottom:40}}>
+      <div style=${{background:isEdit?F.bgSubHeader:F.bgHeader,color:F.textWhite,padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style=${{fontWeight:700,fontSize:15}}>${isEdit?"✏️ Edit Trade":"＋ New Trade Idea"}</span>
+        <button onClick=${onCancel} style=${{background:"transparent",border:"1px solid rgba(255,255,255,0.4)",color:F.textWhite,borderRadius:3,padding:"4px 12px",fontSize:12,cursor:"pointer"}}>✕ Cancel</button>
+      </div>
+      <div style=${{padding:18}}>
+        <${SecLabel}>Trade Details<//>
+        <div style=${{display:"grid",gridTemplateColumns:"1fr 2fr 1fr 1fr",gap:12,marginBottom:12}}>
+          <${FField} label="Symbol" value=${f.ticker} onChange=${v=>set("ticker",v.toUpperCase())} placeholder="AAPL"/>
+          <div><${FLabel}>${def.margin?"Strategy ⚠ Margin":isBuy?"Strategy (Buyer)":"Strategy"}<//>
+            <select value=${f.strategy} onChange=${e=>set("strategy",e.target.value)} style=${inp}>
+              <optgroup label="── Sellers (Credit) ──">
+                ${STRATEGY_DEFS.filter(s=>s.type==="sell").map(s=>html`<option key=${s.name}>${s.name}</option>`)}
+              </optgroup>
+              <optgroup label="── Buyers (Debit) ──">
+                ${STRATEGY_DEFS.filter(s=>s.type==="buy").map(s=>html`<option key=${s.name}>${s.name}</option>`)}
+              </optgroup>
+            </select>
+          </div>
+          <${FField} label="Open Date" value=${f.openDate} onChange=${v=>set("openDate",v)} type="date"/>
+          <${FField} label="Expiry Date" value=${f.expiry} onChange=${v=>set("expiry",v)} type="date"/>
+        </div>
+        <div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:12}}>
+          <${FField} label="Strike (Short)" value=${f.strikeShort} onChange=${v=>set("strikeShort",v)} placeholder="150.00"/>
+          <${FField} label="Strike (Long)" value=${f.strikeLong} onChange=${v=>set("strikeLong",v)} placeholder="145.00"/>
+          <${FField} label=${isBuy?"Debit Paid ($)":"Premium ($)"} value=${f.premium} onChange=${v=>set("premium",v)} placeholder="2.50"/>
+          <${FField} label="Contracts" value=${f.contracts} onChange=${v=>set("contracts",v)} type="number" placeholder="1"/>
+        </div>
+        <div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:12}}>
+          <${FField} label="Current Mark" value=${f.currentValue} onChange=${v=>set("currentValue",v)} placeholder="1.20"/>
+          <${FField} label="Stock Price at Open" value=${f.stockPrice} onChange=${v=>set("stockPrice",v)} placeholder="228.00"/>
+          ${showAssign&&html`<${FField} label="Cost Basis/Share" value=${f.costBasis} onChange=${v=>set("costBasis",v)} placeholder="18.50"/>`}
+          <${FSelect} label="Status" value=${f.status} onChange=${v=>set("status",v)} options=${STATUSES}/>
+        </div>
+        ${f.status!=="Open"&&html`<div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:12}}>
+          <${FField} label="Close Date" value=${f.closeDate} onChange=${v=>set("closeDate",v)} type="date"/>
+        </div>`}
+        ${showAssign&&html`<div style=${{marginBottom:14}}><${AssignmentRiskPanel} t=${f}/></div>`}
+        ${showDiv&&html`<div style=${{background:F.purpleLight,border:`1px solid ${F.purpleBorder}`,borderRadius:4,padding:"12px 14px",marginBottom:14}}>
+          <${SecLabel} color=${F.purple}>💰 Dividend Tracking<//>
+          <div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+            <${FField} label="Div/Share ($)" value=${f.divAmount} onChange=${v=>set("divAmount",v)} placeholder="0.25"/>
+            <${FField} label="Ex-Date" value=${f.divExDate} onChange=${v=>set("divExDate",v)} type="date"/>
+            <${FField} label="Pay Date" value=${f.divPayDate} onChange=${v=>set("divPayDate",v)} type="date"/>
+            <${FField} label="# Collected" value=${f.divCount} onChange=${v=>set("divCount",v)} type="number" placeholder="0"/>
+          </div>
+        </div>`}
+        <${SecLabel}>Notes<//>
+        <div style=${{marginBottom:10}}><${FLabel}>Thesis<//>
+          <textarea value=${f.thesis} onChange=${e=>set("thesis",e.target.value)} placeholder="Why this trade?" style=${{...inp,minHeight:48,resize:"vertical"}}/>
+        </div>
+        <div style=${{marginBottom:14}}><${FLabel}>Notes<//>
+          <textarea value=${f.notes} onChange=${e=>set("notes",e.target.value)} placeholder="Adjustments, lessons…" style=${{...inp,minHeight:36,resize:"vertical"}}/>
+        </div>
+        ${premTotal&&html`<div style=${{background:isBuy?"#eff6ff":F.greenLight,border:`1px solid ${isBuy?"#bfdbfe":F.greenBorder}`,borderRadius:3,padding:"8px 14px",marginBottom:14,fontSize:12,display:"flex",gap:16,flexWrap:"wrap"}}>
+          <span><strong>${isBuy?"Total Debit:":"Total Premium:"}</strong> $${premTotal}</span>
+          ${!isBuy&&html`<span><strong>Max Profit:</strong> ${fmtD(calcMaxProfit(f))}</span>`}
+          ${yld&&!isBuy&&html`<span><strong>Yield:</strong> ${yld}%</span>`}
+          ${def.margin&&html`<span style=${{color:F.gold,fontWeight:700}}>⚠ Margin required</span>`}
+        </div>`}
+        <div style=${{display:"flex",gap:10}}>
+          <button onClick=${()=>onSave(f)} disabled=${saving} style=${{background:F.green,color:F.white,border:"none",borderRadius:3,padding:"9px 24px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+            ${saving&&html`<${Spinner} size=${14}/>`}${isEdit?"💾 Save Changes":"＋ Add Trade"}
+          </button>
+          <button onClick=${onCancel} style=${{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"9px 18px",fontSize:13,cursor:"pointer"}}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── Stock Form ───────────────────────────────────────────────────────────────
+function StockForm({initial,onSave,onCancel,trades,saving}){
+  const blank={id:null,ticker:"",shares:"",buyPrice:"",buyDate:todayStr(),currentPrice:"",status:"Holding",sellPrice:"",sellDate:"",notes:""};
+  const [f,setF]=useState(initial||blank);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const isEdit=!!f.id, isSold=f.status==="Sold"||f.status==="Assigned Away";
+  return html`<div style=${{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:1500,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:40,overflowY:"auto"}}>
+    <div style=${{background:F.white,borderRadius:6,width:620,boxShadow:"0 8px 40px rgba(0,0,0,0.25)",overflow:"hidden",marginBottom:40}}>
+      <div style=${{background:isEdit?F.bgSubHeader:F.bgHeader,color:F.textWhite,padding:"13px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style=${{fontWeight:700,fontSize:15}}>${isEdit?"✏️ Edit Position":"📈 Buy Stock"}</span>
+        <button onClick=${onCancel} style=${{background:"transparent",border:"1px solid rgba(255,255,255,0.4)",color:F.textWhite,borderRadius:3,padding:"4px 12px",fontSize:12,cursor:"pointer"}}>✕</button>
+      </div>
+      <div style=${{padding:20}}>
+        <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:14}}>
+          <${FField} label="Ticker" value=${f.ticker} onChange=${v=>set("ticker",v.toUpperCase())} placeholder="AAPL"/>
+          <${FField} label="Shares" value=${f.shares} onChange=${v=>set("shares",v)} type="number" placeholder="100"/>
+          <${FField} label="Buy Price ($)" value=${f.buyPrice} onChange=${v=>set("buyPrice",v)} placeholder="220.00"/>
+          <${FField} label="Buy Date" value=${f.buyDate} onChange=${v=>set("buyDate",v)} type="date"/>
+        </div>
+        <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:14}}>
+          <${FField} label="Current Price ($)" value=${f.currentPrice} onChange=${v=>set("currentPrice",v)} placeholder="228.00"/>
+          <${FSelect} label="Status" value=${f.status} onChange=${v=>set("status",v)} options=${STOCK_STATUSES}/>
+          ${isSold&&html`<${FField} label="Sell Price ($)" value=${f.sellPrice} onChange=${v=>set("sellPrice",v)} placeholder="235.00"/>`}
+          ${isSold&&html`<${FField} label="Sell Date" value=${f.sellDate} onChange=${v=>set("sellDate",v)} type="date"/>`}
+        </div>
+        <div style=${{marginBottom:14}}><${FLabel}>Notes<//>
+          <textarea value=${f.notes} onChange=${e=>set("notes",e.target.value)} style=${{...inp,minHeight:42,resize:"vertical"}}/>
+        </div>
+        <div style=${{display:"flex",gap:10}}>
+          <button onClick=${()=>onSave(f)} disabled=${saving} style=${{background:F.green,color:F.white,border:"none",borderRadius:3,padding:"9px 24px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+            ${saving&&html`<${Spinner} size=${14}/>`}${isEdit?"💾 Save":"📈 Add Position"}
+          </button>
+          <button onClick=${onCancel} style=${{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"9px 18px",fontSize:13,cursor:"pointer"}}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── Positions Tab ────────────────────────────────────────────────────────────
+function PositionsTab({trades,onEdit,onDelete,onAdd,updMark,readOnly}){
+  const [filter,setFilter]=useState("All");
+  const [search,setSearch]=useState("");
+  const filtered=trades
+    .filter(t=>filter==="All"||t.status===filter)
+    .filter(t=>!search||(t.ticker+t.strategy).toLowerCase().includes(search.toLowerCase()));
+  const open=trades.filter(t=>t.status==="Open");
+  const totPrem=trades.reduce((s,t)=>s+(t.premium&&getDef(t.strategy).type==="sell"?parseN(t.premium)*optQty(t):0),0);
+  const totOptPnl=trades.reduce((s,t)=>s+(calcOptionPnl(t)||0),0);
+  const totDivInc=trades.reduce((s,t)=>s+calcDivIncome(t),0);
+  const colSpan=readOnly?13:14;
+  return html`<div>
+    ${!readOnly&&html`<div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,marginBottom:14,padding:"10px 20px",display:"flex",gap:20,alignItems:"center",flexWrap:"wrap",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
+      <${SummaryItem} label="Open" value=${open.length}/>
+      <${SummaryItem} label="Total Trades" value=${trades.length}/>
+      <${SummaryItem} label="Premium Collected" value=${"+"+fmtD(totPrem)}/>
+      <${SummaryItem} label="Options P&L" value=${(totOptPnl>=0?"+":"-")+fmtD(totOptPnl)} color=${totOptPnl>=0?F.green:F.red}/>
+      ${totDivInc>0&&html`<${SummaryItem} label="Dividends" value=${"+"+fmtD(totDivInc)} color=${F.purple}/>`}
+      <${SummaryItem} label="Margin" value=${open.filter(t=>MARGIN_STRATS.includes(t.strategy)).length} color=${F.gold}/>
+      <div style=${{marginLeft:"auto"}}>
+        <button onClick=${onAdd} style=${{background:F.green,color:F.white,border:"none",borderRadius:3,padding:"7px 18px",fontSize:13,fontWeight:700,cursor:"pointer"}}>+ Add Trade Idea</button>
+      </div>
+    </div>`}
+    <div style=${{display:"flex",gap:8,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
+      <div style=${{display:"flex",gap:0,flex:1,borderBottom:`1px solid ${F.borderLight}`}}>
+        ${["All",...STATUSES].map(s=>html`<button key=${s} onClick=${()=>setFilter(s)} style=${{background:"none",border:"none",borderBottom:filter===s?`2px solid ${F.green}`:"2px solid transparent",color:filter===s?F.green:F.textSecond,fontSize:13,padding:"6px 16px",cursor:"pointer",fontWeight:filter===s?700:400,marginBottom:-1}}>
+          ${s} <span style=${{fontSize:11,color:"#aaa"}}>(${s==="All"?trades.length:trades.filter(t=>t.status===s).length})</span>
+        </button>`)}
+      </div>
+      <input value=${search} onChange=${e=>setSearch(e.target.value)} placeholder="Search…" style=${{padding:"5px 10px",borderRadius:3,border:`1px solid ${F.borderLight}`,fontSize:12,outline:"none",width:140}}/>
+    </div>
+    <div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,overflow:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+      <table style=${{width:"100%",borderCollapse:"collapse",minWidth:1100}}>
+        <thead><tr>
+          ${["Symbol","Strategy","Type","Strikes","Expiry","DTE","Qty","Premium","Yield%","P&L","Status","Acct",...(!readOnly?["Actions"]:[])].map(h=>html`<th key=${h} style=${thS}>${h}</th>`)}
+        </tr></thead>
+        <tbody>
+          ${filtered.length===0?html`<tr><td colSpan=${colSpan} style=${{textAlign:"center",color:F.textMuted,padding:40}}>${trades.length===0?"No trades yet. Click + Add Trade Idea to start.":"No trades match this filter."}</td></tr>`:
+          filtered.map((t,i)=>{
+            const d=dte(t.expiry),sc=STATUS_STYLE[t.status]||STATUS_STYLE.Open;
+            const def=getDef(t.strategy),yld=calcYield(t);
+            const pTot=t.premium&&t.contracts?(parseN(t.premium)*optQty(t)).toFixed(0):null;
+            const rowBg=i%2===0?F.bgPanel:F.rowAlt;
+            return html`<tr key=${t.id} style=${{background:rowBg,borderBottom:`1px solid ${F.borderLight}`}}>
+              <td style=${{...tdS,fontWeight:700,color:F.blueLink}}>${t.ticker}</td>
+              <td style=${tdS}><div style=${{fontSize:12}}>${t.strategy}</div>${t.thesis&&html`<div style=${{fontSize:10,color:F.textMuted,maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${t.thesis}</div>`}</td>
+              <td style=${tdS}><span style=${{fontSize:11,fontWeight:600,color:def.type==="buy"?F.blueLink:F.green}}>${def.type==="buy"?"📈 Buy":"📉 Sell"}</span></td>
+              <td style=${{...tdS,fontFamily:"monospace",fontSize:12}}>${t.strikeShort||"—"}${t.strikeLong?" / "+t.strikeLong:""}</td>
+              <td style=${{...tdS,fontFamily:"monospace",fontSize:12}}>${t.expiry||"—"}</td>
+              <td style=${{...tdS,textAlign:"center",fontWeight:d!==null&&d<=7?700:400,color:d!==null&&d<=7?F.red:d!==null&&d<=14?F.gold:F.textSecond}}>${d!==null?d+"d":"—"}</td>
+              <td style=${{...tdS,textAlign:"center"}}>${t.contracts}</td>
+              <td style=${{...tdS,fontFamily:"monospace",fontSize:12}}>${t.premium?html`<div>$${parseN(t.premium).toFixed(2)}</div>${pTot&&html`<div style=${{fontSize:10,color:F.textMuted}}>$${pTot} total</div>`}`:html`<span style=${{color:F.textMuted}}>—</span>`}</td>
+              <td style=${tdS}>${yld!==null?html`<span style=${{fontSize:12,fontWeight:600}}>${yld.toFixed(2)}%</span>`:html`<span style=${{color:F.textMuted}}>—</span>`}</td>
+              <td style=${tdS}>${readOnly?html`<span style=${{fontWeight:700,color:(calcOptionPnl(t)||0)>=0?F.green:F.red}}>${(calcOptionPnl(t)||0)>=0?"+":"-"}${fmtD(calcOptionPnl(t)||0)}</span>`:html`<${PnlCell} trade=${t} onUpdate=${updMark}/>`}</td>
+              <td style=${tdS}><span style=${{fontSize:11,fontWeight:700,color:sc.color,background:sc.bg,border:`1px solid ${sc.border}`,borderRadius:3,padding:"2px 8px"}}>${t.status}</span></td>
+              <td style=${tdS}>${MARGIN_STRATS.includes(t.strategy)?html`<span style=${{fontSize:11,color:F.gold,fontWeight:600}}>⚠ Margin</span>`:html`<span style=${{fontSize:11,color:F.green}}>✓ Std</span>`}</td>
+              ${!readOnly&&html`<td style=${{...tdS,textAlign:"center"}}>
+                <div style=${{display:"flex",gap:5,justifyContent:"center"}}>
+                  <${ActionBtn} label="✏ Edit" color=${F.blueLink} bg=${F.blueLinkLight} onClick=${()=>onEdit(t)}/>
+                  <${ActionBtn} label="✕" color=${F.red} onClick=${()=>onDelete(t.id)}/>
+                </div>
+              </td>`}
+            </tr>`;
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// ─── Stock Holdings Tab ───────────────────────────────────────────────────────
+function StockHoldingsTab({stocks,trades,onAdd,onEdit,onDelete,readOnly}){
+  const [sub,setSub]=useState("all");
+  const visible=sub==="holding"?stocks.filter(s=>s.status==="Holding"):sub==="sold"?stocks.filter(s=>s.status==="Sold"):sub==="assigned"?stocks.filter(s=>s.status==="Assigned Away"):stocks;
+  const totalCost=stocks.reduce((s,st)=>s+(parseN(st.buyPrice)*(parseInt(st.shares)||0)),0);
+  const totalPnl=stocks.reduce((s,st)=>s+(calcStockPnl(st)||0),0);
+  const tabs=[{k:"all",l:"All"},{k:"holding",l:"Holding"},{k:"sold",l:"Sold"},{k:"assigned",l:"Assigned Away"}];
+  return html`<div>
+    <div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,marginBottom:14,padding:"10px 20px",display:"flex",gap:20,alignItems:"center",flexWrap:"wrap",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
+      <${SummaryItem} label="Positions" value=${stocks.length}/>
+      <${SummaryItem} label="Total Cost" value=${fmtD(totalCost)}/>
+      <${SummaryItem} label="Total P&L" value=${(totalPnl>=0?"+":"-")+fmtD(totalPnl)} color=${totalPnl>=0?F.green:F.red}/>
+      ${!readOnly&&html`<div style=${{marginLeft:"auto"}}><button onClick=${onAdd} style=${{background:F.green,color:F.white,border:"none",borderRadius:3,padding:"7px 18px",fontSize:13,fontWeight:700,cursor:"pointer"}}>📈 Buy Stock</button></div>`}
+    </div>
+    <div style=${{display:"flex",gap:0,marginBottom:12,borderBottom:`1px solid ${F.borderLight}`}}>
+      ${tabs.map(({k,l})=>html`<button key=${k} onClick=${()=>setSub(k)} style=${{background:"none",border:"none",borderBottom:sub===k?`2px solid ${F.green}`:"2px solid transparent",color:sub===k?F.green:F.textSecond,fontSize:13,padding:"6px 16px",cursor:"pointer",fontWeight:sub===k?700:400,marginBottom:-1}}>${l}</button>`)}
+    </div>
+    ${visible.length===0?html`<div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:40,textAlign:"center",color:F.textMuted}}>No positions.</div>`:
+    html`<div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,overflow:"auto"}}>
+      <table style=${{width:"100%",borderCollapse:"collapse",minWidth:800}}>
+        <thead><tr>${["Ticker","Shares","Buy Price","Buy Date","Current/Sale Price","Cost","P&L","Status",...(!readOnly?["Actions"]:[])].map(h=>html`<th key=${h} style=${thS}>${h}</th>`)}</tr></thead>
+        <tbody>
+          ${visible.map((st,i)=>{
+            const shares=parseInt(st.shares)||0,cost=parseN(st.buyPrice)*shares;
+            const pnl=calcStockPnl(st),ss={Holding:{color:F.green,bg:F.greenLight,border:F.greenBorder},Sold:{color:"#555",bg:"#f0f0f0",border:"#ccc"},"Assigned Away":{color:F.gold,bg:F.goldLight,border:"#ffe08a"}}[st.status]||{color:F.green,bg:F.greenLight,border:F.greenBorder};
+            const isClosed=st.status==="Sold"||st.status==="Assigned Away";
+            const rowBg=i%2===0?F.bgPanel:F.rowAlt;
+            return html`<tr key=${st.id} style=${{background:rowBg,borderBottom:`1px solid ${F.borderLight}`}}>
+              <td style=${{...tdS,fontWeight:700,color:F.blueLink}}>${st.ticker}</td>
+              <td style=${tdS}>${shares.toLocaleString()}</td>
+              <td style=${{...tdS,fontFamily:"monospace"}}>$${parseN(st.buyPrice).toFixed(2)}</td>
+              <td style=${{...tdS,fontSize:11,color:F.textSecond}}>${st.buyDate||"—"}</td>
+              <td style=${{...tdS,fontFamily:"monospace"}}>${isClosed?(st.sellPrice?"$"+parseN(st.sellPrice).toFixed(2):"—"):(st.currentPrice?"$"+parseN(st.currentPrice).toFixed(2):"not set")}</td>
+              <td style=${{...tdS,fontFamily:"monospace",color:F.textSecond}}>${fmtD(cost)}</td>
+              <td style=${tdS}>${pnl!==null?html`<span style=${{fontWeight:700,color:pnl>=0?F.green:F.red}}>${pnl>=0?"+":"-"}${fmtD(pnl)}</span>`:html`<span style=${{color:F.textMuted}}>—</span>`}</td>
+              <td style=${tdS}><span style=${{fontSize:11,fontWeight:700,color:ss.color,background:ss.bg,border:`1px solid ${ss.border}`,borderRadius:3,padding:"2px 8px"}}>${st.status}</span></td>
+              ${!readOnly&&html`<td style=${{...tdS,textAlign:"center"}}>
+                <div style=${{display:"flex",gap:5,justifyContent:"center"}}>
+                  <${ActionBtn} label="✏ Edit" color=${F.blueLink} bg=${F.blueLinkLight} onClick=${()=>onEdit(st)}/>
+                  <${ActionBtn} label="✕" color=${F.red} onClick=${()=>onDelete(st.id)}/>
+                </div>
+              </td>`}
+            </tr>`;
+          })}
+        </tbody>
+      </table>
+    </div>`}
+  </div>`;
+}
+
+// ─── Analytics Tab ────────────────────────────────────────────────────────────
+function AnalyticsPanel({trades,stocks}){
+  const totOptPnl=trades.reduce((s,t)=>s+(calcOptionPnl(t)||0),0);
+  const totDivInc=trades.reduce((s,t)=>s+calcDivIncome(t),0);
+  const totStkPnl=stocks.reduce((s,st)=>s+(calcStockPnl(st)||0),0);
+  const totAll=totOptPnl+totDivInc+totStkPnl;
+  const winners=trades.filter(t=>(calcOptionPnl(t)||0)>0).length;
+  const winRate=trades.length>0?Math.round((winners/trades.length)*100):null;
+  const byStrat={};
+  trades.forEach(t=>{if(!byStrat[t.strategy])byStrat[t.strategy]={count:0,pnl:0,div:0};byStrat[t.strategy].count++;byStrat[t.strategy].pnl+=calcOptionPnl(t)||0;byStrat[t.strategy].div+=calcDivIncome(t);});
+  return html`<div>
+    <div style=${{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:14,marginBottom:18}}>
+      ${[
+        {label:"Win Rate",value:winRate!==null?winRate+"%":"—",color:winRate!==null&&winRate>50?F.green:F.red},
+        {label:"Winners / Losers",value:winners+" / "+(trades.filter(t=>(calcOptionPnl(t)||0)<0).length)},
+        {label:"Options P&L",value:(totOptPnl>=0?"+":"-")+fmtD(totOptPnl),color:totOptPnl>=0?F.green:F.red},
+        {label:"Stock P&L",value:(totStkPnl>=0?"+":"-")+fmtD(totStkPnl),color:totStkPnl>=0?F.green:F.red},
+        {label:"Combined",value:(totAll>=0?"+":"-")+fmtD(totAll),color:totAll>=0?F.green:F.red},
+      ].map(c=>html`<div key=${c.label} style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:"14px 16px",boxShadow:"0 1px 3px rgba(0,0,0,0.05)"}}>
+        <div style=${{fontSize:11,color:F.textMuted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>${c.label}</div>
+        <div style=${{fontSize:20,fontWeight:700,color:c.color||F.textPrimary}}>${c.value}</div>
+      </div>`)}
+    </div>
+    <div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,overflow:"hidden"}}>
+      <div style=${{padding:"10px 16px",background:"#e8ede8",borderBottom:`1px solid ${F.borderLight}`,fontWeight:700,fontSize:13}}>P&L by Strategy</div>
+      <table style=${{width:"100%",borderCollapse:"collapse"}}>
+        <thead><tr>${["Strategy","Type","Trades","P&L","Div Income","Combined"].map(h=>html`<th key=${h} style=${thS}>${h}</th>`)}</tr></thead>
+        <tbody>
+          ${Object.entries(byStrat).sort((a,b)=>(b[1].pnl+b[1].div)-(a[1].pnl+a[1].div)).map(([strat,d],i)=>{
+            const def=getDef(strat),comb=d.pnl+d.div;
+            return html`<tr key=${strat} style=${{background:i%2===0?F.bgPanel:F.rowAlt,borderBottom:`1px solid ${F.borderLight}`}}>
+              <td style=${tdS}>${strat}</td>
+              <td style=${tdS}><span style=${{fontSize:11,fontWeight:600,color:def.type==="buy"?F.blueLink:F.green}}>${def.type==="buy"?"📈 Buy":"📉 Sell"}</span></td>
+              <td style=${tdS}>${d.count}</td>
+              <td style=${{...tdS,fontWeight:700,color:d.pnl>=0?F.green:F.red}}>${d.pnl>=0?"+":"-"}${fmtD(d.pnl)}</td>
+              <td style=${{...tdS,color:F.purple}}>${d.div>0?"+"+fmtD(d.div):"—"}</td>
+              <td style=${{...tdS,fontWeight:700,color:comb>=0?F.green:F.red}}>${comb>=0?"+":"-"}${fmtD(comb)}</td>
+            </tr>`;
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// ─── Account Banner ───────────────────────────────────────────────────────────
+function AccountBanner({trades,stocks,startBal,onSaveBal}){
+  const [editing,setEditing]=useState(false);
+  const [balInput,setBalInput]=useState(startBal);
+  const {cash,optMark,stkMkt,total,divInc}=calcTotalValue(trades,stocks,startBal);
+  const vs=total-parseN(startBal),vsPct=parseN(startBal)>0?(vs/parseN(startBal))*100:0;
+  const totPrem=trades.reduce((s,t)=>s+(t.premium&&getDef(t.strategy).type==="sell"?parseN(t.premium)*optQty(t):0),0);
+  const stkCost=stocks.reduce((s,st)=>s+(parseN(st.buyPrice)*(parseInt(st.shares)||0)),0);
+  return html`<div style=${{background:F.bgBanner,borderBottom:`2px solid ${F.green}`}}>
+    <div style=${{maxWidth:1400,margin:"0 auto",padding:"0 20px"}}>
+      <div style=${{display:"flex",alignItems:"center",gap:24,padding:"12px 0 10px",overflowX:"auto"}}>
+        <div>
+          <div style=${{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1,marginBottom:2}}>Total Account Value</div>
+          <div style=${{display:"flex",alignItems:"baseline",gap:10}}>
+            <span style=${{fontSize:34,fontWeight:800,color:"#fff",letterSpacing:-1}}>${fmtD(total)}</span>
+            <span style=${{fontSize:13,fontWeight:700,color:vs>=0?"#4ade80":F.red}}>${vs>=0?"▲":"▼"} ${fmtD(vs)} (${vs>=0?"+":""}${vsPct.toFixed(2)}%)</span>
+          </div>
+        </div>
+        <div style=${{width:1,height:44,background:"#1e3247",flexShrink:0}}/>
+        <div>
+          <div style=${{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1,marginBottom:2}}>Cash Balance</div>
+          <div style=${{fontSize:18,fontWeight:700,color:"#a8c4d8"}}>${fmtD(cash)}</div>
+        </div>
+        <div style=${{width:1,height:44,background:"#1e3247",flexShrink:0}}/>
+        <div style=${{display:"flex",alignItems:"center",gap:6}}>
+          <span style=${{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1}}>Starting:</span>
+          ${editing?html`<div style=${{display:"flex",alignItems:"center",gap:4}}>
+            <input autoFocus value=${balInput} onChange=${e=>setBalInput(e.target.value.replace(/[^0-9.]/g,""))}
+              onKeyDown=${e=>{if(e.key==="Enter"){onSaveBal(balInput);setEditing(false);}if(e.key==="Escape")setEditing(false);}}
+              style=${{background:"#1a2e3f",border:"1px solid #3a6a90",borderRadius:3,color:"#fff",fontSize:13,fontWeight:600,width:90,padding:"2px 6px",outline:"none"}}/>
+            <button onClick=${()=>{onSaveBal(balInput);setEditing(false);}} style=${{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"2px 8px",fontSize:11,cursor:"pointer",fontWeight:700}}>✓</button>
+            <button onClick=${()=>setEditing(false)} style=${{background:"transparent",color:"#8aafc5",border:"1px solid #3a5570",borderRadius:3,padding:"2px 6px",fontSize:11,cursor:"pointer"}}>✕</button>
+          </div>`:html`<button onClick=${()=>{setBalInput(startBal);setEditing(true);}} style=${{background:"#1a2e3f",border:"1px solid #2a4a60",color:"#7a9ab5",borderRadius:3,padding:"3px 10px",fontSize:12,cursor:"pointer",fontWeight:600}}>$${parseN(startBal).toLocaleString()} ✏</button>`}
+        </div>
+        <div style=${{marginLeft:"auto",display:"flex",gap:24,alignItems:"center",flexShrink:0}}>
+          ${stkMkt>0&&html`<div style=${{textAlign:"right"}}><div style=${{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1}}>Stock Mkt Value</div><div style=${{fontSize:15,fontWeight:700,color:"#a8c4d8"}}>${fmtD(stkMkt)}</div></div>`}
+          ${divInc>0&&html`<div style=${{textAlign:"right"}}><div style=${{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1}}>Dividends</div><div style=${{fontSize:15,fontWeight:700,color:"#c4b5fd"}}>+${fmtD(divInc)}</div></div>`}
+        </div>
+      </div>
+      <div style=${{borderTop:"1px solid #1a2e3f",padding:"5px 0",display:"flex",gap:20,fontSize:11,color:"#4a6a80",flexWrap:"wrap"}}>
+        ${totPrem>0&&html`<span>Premium in: <strong style=${{color:"#6ee7b7"}}>+${fmtD(totPrem)}</strong></span>`}
+        ${stkCost>0&&html`<span>Stock cost: <strong style=${{color:"#f87171"}}>-${fmtD(stkCost)}</strong></span>`}
+        ${divInc>0&&html`<span>Dividends: <strong style=${{color:"#c4b5fd"}}>+${fmtD(divInc)}</strong></span>`}
+        ${stkMkt>0&&html`<span>Holdings: <strong style=${{color:"#93c5fd"}}>${fmtD(stkMkt)}</strong></span>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── Student Dashboard ────────────────────────────────────────────────────────
+function StudentDashboard({profile,onSignOut}){
+  const [trades,setTrades]=useState([]);
+  const [stocks,setStocks]=useState([]);
+  const [startBal,setStartBal]=useState(profile.starting_balance?.toString()||"25000");
+  const [loading,setLoading]=useState(true);
+  const [activeTab,setTab]=useState("positions");
+  const [showTradeForm,setShowTradeForm]=useState(false);
+  const [editTrade,setEditTrade]=useState(null);
+  const [showStockForm,setShowStockForm]=useState(false);
+  const [editStock,setEditStock]=useState(null);
+  const [showReset,setShowReset]=useState(false);
+  const [saving,setSaving]=useState(false);
+
+  useEffect(()=>{load();},[]);
+  async function load(){
+    setLoading(true);
+    const[tr,st]=await Promise.all([
+      sb.from("trades").select("*").eq("user_id",profile.id).order("created_at",{ascending:false}),
+      sb.from("stocks").select("*").eq("user_id",profile.id).order("created_at",{ascending:false}),
+    ]);
+    setTrades((tr.data||[]).map(rowToTrade));
+    setStocks((st.data||[]).map(rowToStock));
+    setLoading(false);
+  }
+
+  const addTrade=async f=>{setSaving(true);const{data,error}=await sb.from("trades").insert(tradeToRow(f,profile.id)).select().single();if(!error){setTrades(p=>[rowToTrade(data),...p]);setShowTradeForm(false);}else alert(error.message);setSaving(false);};
+  const saveTrade=async f=>{setSaving(true);const{error}=await sb.from("trades").update(tradeToRow(f,profile.id)).eq("id",f.id);if(!error){setTrades(p=>p.map(r=>r.id===f.id?f:r));setEditTrade(null);}else alert(error.message);setSaving(false);};
+  const delTrade=async id=>{if(!window.confirm("Remove this trade?"))return;await sb.from("trades").delete().eq("id",id);setTrades(p=>p.filter(r=>r.id!==id));};
+  const updMark=async(id,cv)=>{setTrades(p=>p.map(r=>r.id===id?{...r,currentValue:cv}:r));await sb.from("trades").update({current_value:parseN(cv)||null,updated_at:new Date().toISOString()}).eq("id",id);};
+  const addStock=async f=>{setSaving(true);const{data,error}=await sb.from("stocks").insert(stockToRow(f,profile.id)).select().single();if(!error){setStocks(p=>[rowToStock(data),...p]);setShowStockForm(false);}else alert(error.message);setSaving(false);};
+  const saveStock=async f=>{setSaving(true);const{error}=await sb.from("stocks").update(stockToRow(f,profile.id)).eq("id",f.id);if(!error){setStocks(p=>p.map(r=>r.id===f.id?f:r));setEditStock(null);}else alert(error.message);setSaving(false);};
+  const delStock=async id=>{if(!window.confirm("Remove this position?"))return;await sb.from("stocks").delete().eq("id",id);setStocks(p=>p.filter(r=>r.id!==id));};
+  const resetAccount=async()=>{setSaving(true);await Promise.all([sb.from("trades").delete().eq("user_id",profile.id),sb.from("stocks").delete().eq("user_id",profile.id)]);setTrades([]);setStocks([]);setShowReset(false);setSaving(false);};
+  const saveStartBal=async val=>{setStartBal(val);await sb.from("profiles").update({starting_balance:parseN(val)||25000}).eq("id",profile.id);};
+
+  const tabs=[["positions","Positions"],["stocks","Stock Holdings"],["analytics","Summary & Analytics"]];
+  if(loading)return html`<div style=${{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:F.bgPage}}><${Spinner} size=${40}/></div>`;
+
+  return html`<div style=${{minHeight:"100vh",background:F.bgPage}}>
+    <${AccountBanner} trades=${trades} stocks=${stocks} startBal=${startBal} onSaveBal=${saveStartBal}/>
+    <div style=${{background:F.bgHeader}}>
+      <div style=${{maxWidth:1400,margin:"0 auto",padding:"0 16px",display:"flex",alignItems:"center",height:46,gap:10}}>
+        <div style=${{display:"flex",alignItems:"center",gap:8,flexShrink:0,marginRight:8}}>
+          <div style=${{width:26,height:26,borderRadius:"50%",background:F.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>📈</div>
+          <span style=${{fontWeight:700,fontSize:14,color:"#fff",whiteSpace:"nowrap"}}>Options Learning Platform</span>
+          <span style=${{fontSize:10,background:"#2a4055",borderRadius:2,padding:"2px 6px",color:"#7a9ab5"}}>PAPER TRADING</span>
+        </div>
+        <span style=${{fontSize:12,color:"#8aafc5"}}>${profile.full_name||profile.email}</span>
+        <div style=${{marginLeft:"auto",display:"flex",gap:8,flexShrink:0}}>
+          <button onClick=${()=>setShowReset(true)} style=${{background:"none",border:"1px solid #4a6a80",color:"#8aafc5",borderRadius:3,padding:"5px 10px",fontSize:12,cursor:"pointer"}}>↺ Reset</button>
+          <button onClick=${onSignOut} style=${{background:"#1a2e3f",border:"1px solid #2a4a60",color:"#8aafc5",borderRadius:3,padding:"5px 12px",fontSize:12,cursor:"pointer"}}>Sign Out</button>
+        </div>
+      </div>
+    </div>
+    <div style=${{background:F.bgSubHeader,borderBottom:`2px solid ${F.green}`}}>
+      <div style=${{maxWidth:1400,margin:"0 auto",padding:"0 20px",display:"flex"}}>
+        ${tabs.map(([k,label])=>html`<button key=${k} onClick=${()=>setTab(k)} style=${{background:"none",border:"none",color:activeTab===k?F.white:"#8aafc5",fontSize:13,padding:"10px 18px",cursor:"pointer",borderBottom:activeTab===k?`3px solid ${F.green}`:"3px solid transparent",fontWeight:activeTab===k?700:400,marginBottom:-2}}>${label}</button>`)}
+      </div>
+    </div>
+    <div style=${{maxWidth:1400,margin:"0 auto",padding:"16px 20px"}}>
+      ${activeTab==="positions"&&html`<${PositionsTab} trades=${trades} onEdit=${t=>setEditTrade(t)} onDelete=${delTrade} onAdd=${()=>setShowTradeForm(true)} updMark=${updMark}/>`}
+      ${activeTab==="stocks"&&html`<${StockHoldingsTab} stocks=${stocks} trades=${trades} onAdd=${()=>setShowStockForm(true)} onEdit=${st=>setEditStock(st)} onDelete=${delStock}/>`}
+      ${activeTab==="analytics"&&html`<${AnalyticsPanel} trades=${trades} stocks=${stocks}/>`}
+    </div>
+    ${(showTradeForm||editTrade)&&html`<${TradeForm} initial=${editTrade||undefined} onSave=${editTrade?saveTrade:addTrade} onCancel=${()=>{setShowTradeForm(false);setEditTrade(null);}} saving=${saving}/>`}
+    ${(showStockForm||editStock)&&html`<${StockForm} initial=${editStock||undefined} trades=${trades} onSave=${editStock?saveStock:addStock} onCancel=${()=>{setShowStockForm(false);setEditStock(null);}} saving=${saving}/>`}
+    ${showReset&&html`<${Modal} title="Reset Account" onClose=${()=>setShowReset(false)}>
+      <div style=${{padding:20}}>
+        <div style=${{fontSize:13,color:F.textSecond,marginBottom:14}}>Delete all ${trades.length} trades and ${stocks.length} stock positions? Cannot be undone.</div>
+        <div style=${{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick=${()=>setShowReset(false)} style=${{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"8px 20px",fontSize:13,cursor:"pointer"}}>Cancel</button>
+          <button onClick=${resetAccount} disabled=${saving} style=${{background:F.red,color:F.white,border:"none",borderRadius:3,padding:"8px 20px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>${saving&&html`<${Spinner} size=${14}/>`}Yes, Reset</button>
+        </div>
+      </div>
+    <//>`}
+  </div>`;
+}
+
+// ─── Read-only student view ───────────────────────────────────────────────────
+function StudentReadOnlyView({student,onBack}){
+  const{trades,stocks,startBal,profile}=student;
+  const{total}=calcTotalValue(trades,stocks,startBal);
+  const[activeTab,setTab]=useState("positions");
+  const tabs=[["positions","Positions"],["stocks","Stock Holdings"],["analytics","Analytics"]];
+  return html`<div style=${{minHeight:"100vh",background:F.bgPage}}>
+    <div style=${{background:F.bgBanner,borderBottom:`2px solid ${F.gold}`}}>
+      <div style=${{maxWidth:1400,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center",height:52,gap:12}}>
+        <button onClick=${onBack} style=${{background:"#1a2e3f",border:`1px solid ${F.gold}`,color:F.gold,borderRadius:3,padding:"5px 12px",fontSize:12,cursor:"pointer",fontWeight:600,flexShrink:0}}>← Back to Leaderboard</button>
+        <span style=${{fontWeight:700,fontSize:15,color:"#fff"}}>${profile.full_name||profile.email}</span>
+        <span style=${{fontSize:11,background:"#2a3a1a",borderRadius:3,padding:"2px 8px",color:F.gold}}>READ ONLY</span>
+        <div style=${{marginLeft:"auto",display:"flex",gap:24}}>
+          <div style=${{textAlign:"right"}}><div style=${{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1}}>Account Value</div><div style=${{fontSize:22,fontWeight:800,color:"#fff"}}>${fmtD(total)}</div></div>
+          <div style=${{textAlign:"right"}}><div style=${{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1}}>P&L</div><div style=${{fontSize:18,fontWeight:700,color:(total-parseN(startBal))>=0?"#4ade80":F.red}}>${(total-parseN(startBal))>=0?"+":"-"}${fmtD(total-parseN(startBal))}</div></div>
+        </div>
+      </div>
+    </div>
+    <div style=${{background:F.bgSubHeader,borderBottom:`2px solid ${F.gold}`}}>
+      <div style=${{maxWidth:1400,margin:"0 auto",padding:"0 20px",display:"flex"}}>
+        ${tabs.map(([k,label])=>html`<button key=${k} onClick=${()=>setTab(k)} style=${{background:"none",border:"none",color:activeTab===k?F.white:"#8aafc5",fontSize:13,padding:"10px 18px",cursor:"pointer",borderBottom:activeTab===k?`3px solid ${F.gold}`:"3px solid transparent",fontWeight:activeTab===k?700:400,marginBottom:-2}}>${label}</button>`)}
+      </div>
+    </div>
+    <div style=${{maxWidth:1400,margin:"0 auto",padding:"16px 20px"}}>
+      ${activeTab==="positions"&&html`<${PositionsTab} trades=${trades} readOnly/>`}
+      ${activeTab==="stocks"&&html`<${StockHoldingsTab} stocks=${stocks} trades=${trades} readOnly/>`}
+      ${activeTab==="analytics"&&html`<${AnalyticsPanel} trades=${trades} stocks=${stocks}/>`}
+    </div>
+  </div>`;
+}
+
+// ─── Teacher Dashboard ────────────────────────────────────────────────────────
+function TeacherDashboard({profile,onSignOut}){
+  const[classes,setClasses]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[activeClass,setActiveClass]=useState(null);
+  const[students,setStudents]=useState([]);
+  const[studLoading,setStudLoading]=useState(false);
+  const[showCreate,setShowCreate]=useState(false);
+  const[newName,setNewName]=useState("");
+  const[newBal,setNewBal]=useState("25000");
+  const[creating,setCreating]=useState(false);
+  const[viewStudent,setViewStudent]=useState(null);
+  const[confirmReset,setConfirmReset]=useState(null);
+  const[resetting,setResetting]=useState(false);
+  const[editClass,setEditClass]=useState(null);
+  const[editName,setEditName]=useState("");
+  const[editBal,setEditBal]=useState("");
+  const[editSaving,setEditSaving]=useState(false);
+  const[confirmDelClass,setConfirmDelClass]=useState(false);
+  const[confirmRegenCode,setConfirmRegenCode]=useState(false);
+  const[newCode,setNewCode]=useState(null);
+
+  useEffect(()=>{loadClasses();},[]);
+
+  const loadClasses=async()=>{setLoading(true);const{data}=await sb.from("classes").select("*").eq("teacher_id",profile.id).order("created_at",{ascending:false});setClasses(data||[]);setLoading(false);};
+  const loadStudents=async cls=>{
+    setActiveClass(cls);setStudLoading(true);setNewCode(null);
+    const{data:profs}=await sb.from("profiles").select("*").eq("class_id",cls.id);
+    if(!profs?.length){setStudents([]);setStudLoading(false);return;}
+    const ids=profs.map(p=>p.id);
+    const[{data:trs},{data:stks}]=await Promise.all([sb.from("trades").select("*").in("user_id",ids),sb.from("stocks").select("*").in("user_id",ids)]);
+    const result=profs.map(p=>{
+      const t=(trs||[]).filter(x=>x.user_id===p.id).map(rowToTrade);
+      const s=(stks||[]).filter(x=>x.user_id===p.id).map(rowToStock);
+      const bal=parseN(p.starting_balance||cls.starting_balance||25000);
+      const{total}=calcTotalValue(t,s,bal);
+      const pnl=total-bal;
+      const winners=t.filter(x=>(calcOptionPnl(x)||0)>0).length;
+      return{profile:p,trades:t,stocks:s,total,pnl,startBal:bal.toString(),winRate:t.length>0?Math.round((winners/t.length)*100):null,openCount:t.filter(x=>x.status==="Open").length,tradeCount:t.length};
+    }).sort((a,b)=>b.total-a.total);
+    setStudents(result);setStudLoading(false);
+  };
+  const createClass=async()=>{if(!newName.trim())return;setCreating(true);const code=genCode();const{error}=await sb.from("classes").insert({teacher_id:profile.id,name:newName.trim(),class_code:code,starting_balance:parseN(newBal)||25000});if(!error){setShowCreate(false);setNewName("");setNewBal("25000");await loadClasses();}else alert(error.message);setCreating(false);};
+  const saveEditClass=async()=>{setEditSaving(true);await sb.from("classes").update({name:editName.trim(),starting_balance:parseN(editBal)||25000}).eq("id",editClass.id);const updated={...editClass,name:editName.trim(),starting_balance:parseN(editBal)||25000};setClasses(p=>p.map(c=>c.id===updated.id?updated:c));if(activeClass?.id===updated.id)setActiveClass(updated);setEditClass(null);setEditSaving(false);};
+  const regenCode=async()=>{setEditSaving(true);const code=genCode();await sb.from("classes").update({class_code:code}).eq("id",editClass.id);setNewCode(code);setClasses(p=>p.map(c=>c.id===editClass.id?{...c,class_code:code}:c));if(activeClass?.id===editClass.id)setActiveClass(prev=>({...prev,class_code:code}));setConfirmRegenCode(false);setEditSaving(false);};
+  const deleteClass=async()=>{setEditSaving(true);await sb.from("classes").delete().eq("id",editClass.id);setClasses(p=>p.filter(c=>c.id!==editClass.id));if(activeClass?.id===editClass.id){setActiveClass(null);setStudents([]);}setEditClass(null);setEditSaving(false);};
+  const resetStudent=async s=>{setResetting(true);await Promise.all([sb.from("trades").delete().eq("user_id",s.profile.id),sb.from("stocks").delete().eq("user_id",s.profile.id)]);setConfirmReset(null);await loadStudents(activeClass);setResetting(false);};
+  const resetAll=async()=>{setResetting(true);for(const s of students){await Promise.all([sb.from("trades").delete().eq("user_id",s.profile.id),sb.from("stocks").delete().eq("user_id",s.profile.id)]);}setConfirmReset(null);await loadStudents(activeClass);setResetting(false);};
+
+  if(viewStudent)return html`<${StudentReadOnlyView} student=${viewStudent} onBack=${()=>setViewStudent(null)}/>`;
+
+  return html`<div style=${{minHeight:"100vh",background:F.bgPage}}>
+    <div style=${{background:F.bgBanner,borderBottom:`2px solid ${F.green}`}}>
+      <div style=${{maxWidth:1200,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center",height:56,gap:12}}>
+        <div style=${{width:30,height:30,borderRadius:"50%",background:F.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>📈</div>
+        <span style=${{fontWeight:800,fontSize:16,color:"#fff"}}>Options Learning Platform</span>
+        <span style=${{fontSize:11,background:"#1a3a5c",borderRadius:3,padding:"2px 8px",color:"#7dd3a8"}}>TEACHER</span>
+        <div style=${{marginLeft:"auto",display:"flex",alignItems:"center",gap:12}}>
+          <span style=${{fontSize:13,color:"#a8c4d8"}}>${profile.full_name||profile.email}</span>
+          <button onClick=${onSignOut} style=${{background:"#1a2e3f",border:"1px solid #2a4a60",color:"#8aafc5",borderRadius:3,padding:"5px 12px",fontSize:12,cursor:"pointer"}}>Sign Out</button>
+        </div>
+      </div>
+    </div>
+    <div style=${{maxWidth:1200,margin:"0 auto",padding:24}}>
+      <div style=${{display:"grid",gridTemplateColumns:"300px 1fr",gap:24}}>
+        <div>
+          <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <h2 style=${{fontSize:16,fontWeight:700}}>My Classes</h2>
+            <button onClick=${()=>setShowCreate(true)} style=${{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer"}}>+ New Class</button>
+          </div>
+          ${loading?html`<div style=${{textAlign:"center",padding:40}}><${Spinner} size=${24}/></div>`:classes.length===0?html`<div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:32,textAlign:"center",color:F.textMuted}}>No classes yet. Click + New Class.</div>`:
+          html`<div style=${{display:"flex",flexDirection:"column",gap:10}}>
+            ${classes.map(cls=>html`<div key=${cls.id} onClick=${()=>loadStudents(cls)} style=${{background:activeClass?.id===cls.id?"#f0f7f0":F.bgPanel,border:`1px solid ${activeClass?.id===cls.id?F.green:F.borderLight}`,borderRadius:4,padding:"12px 14px",cursor:"pointer",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
+              <div style=${{fontWeight:700,fontSize:14,marginBottom:6}}>${cls.name}</div>
+              <div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                <span style=${{fontFamily:"monospace",fontSize:18,fontWeight:800,color:F.green,letterSpacing:3}}>${cls.class_code}</span>
+                <button onClick=${e=>{e.stopPropagation();navigator.clipboard?.writeText(cls.class_code);}} style=${{background:"none",border:`1px solid ${F.green}`,color:F.green,borderRadius:3,padding:"2px 7px",fontSize:10,cursor:"pointer"}}>Copy</button>
+              </div>
+              <div style=${{fontSize:11,color:F.textMuted,marginBottom:8}}>Starting: $${parseN(cls.starting_balance).toLocaleString()}</div>
+              <button onClick=${e=>{e.stopPropagation();setEditClass(cls);setEditName(cls.name);setEditBal(cls.starting_balance?.toString()||"25000");setConfirmDelClass(false);setConfirmRegenCode(false);setNewCode(null);}} style=${{background:F.blueLinkLight,border:`1px solid ${F.blueLink}`,color:F.blueLink,borderRadius:3,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}}>⚙ Settings</button>
+            </div>`)}
+          </div>`}
+        </div>
+        <div>
+          ${!activeClass?html`<div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:60,textAlign:"center",color:F.textMuted}}>
+            <div style=${{fontSize:32,marginBottom:12}}>📊</div>
+            <div style=${{fontWeight:600,fontSize:16,marginBottom:6}}>Select a class</div>
+            <div style=${{fontSize:13}}>Click a class on the left to see the leaderboard.</div>
+          </div>`:html`<div>
+            <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <h2 style=${{fontSize:16,fontWeight:700}}>${activeClass.name} — Leaderboard</h2>
+              <button onClick=${()=>setConfirmReset("all")} style=${{background:"none",border:`1px solid ${F.gold}`,color:F.gold,borderRadius:3,padding:"5px 12px",fontSize:12,cursor:"pointer",fontWeight:600}}>↺ Reset All</button>
+            </div>
+            ${studLoading?html`<div style=${{textAlign:"center",padding:60}}><${Spinner} size=${28}/></div>`:students.length===0?html`<div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:40,textAlign:"center",color:F.textMuted}}>
+              <div style=${{fontWeight:600,marginBottom:8}}>No students yet.</div>
+              <div style=${{fontSize:13}}>Share code: <strong style=${{color:F.green,fontFamily:"monospace",letterSpacing:3,fontSize:16}}>${activeClass.class_code}</strong></div>
+            </div>`:html`<div style=${{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,overflow:"auto"}}>
+              <table style=${{width:"100%",borderCollapse:"collapse"}}>
+                <thead><tr>${["Rank","Student","Account Value","P&L","Win Rate","Trades","Open","Actions"].map(h=>html`<th key=${h} style=${thS}>${h}</th>`)}</tr></thead>
+                <tbody>
+                  ${students.map((s,i)=>html`<tr key=${s.profile.id} style=${{background:i===0?"#f0fff4":i%2===0?F.bgPanel:F.rowAlt,borderBottom:`1px solid ${F.borderLight}`}}>
+                    <td style=${{...tdS,textAlign:"center",fontWeight:700,fontSize:16,color:i===0?F.green:F.textMuted}}>${i===0?"🥇":i===1?"🥈":i===2?"🥉":i+1}</td>
+                    <td style=${tdS}><div style=${{fontWeight:600}}>${s.profile.full_name||s.profile.email}</div><div style=${{fontSize:10,color:F.textMuted}}>${s.profile.email}</div></td>
+                    <td style=${{...tdS,fontWeight:700,fontSize:14}}>${fmtD(s.total)}</td>
+                    <td style=${{...tdS,fontWeight:700,color:s.pnl>=0?F.green:F.red}}>${s.pnl>=0?"+":"-"}${fmtD(s.pnl)}</td>
+                    <td style=${{...tdS,color:s.winRate===null?F.textMuted:s.winRate>50?F.green:F.red,fontWeight:s.winRate!==null?700:400}}>${s.winRate!==null?s.winRate+"%":"—"}</td>
+                    <td style=${tdS}>${s.tradeCount}</td>
+                    <td style=${tdS}>${s.openCount}</td>
+                    <td style=${{...tdS,textAlign:"center"}}>
+                      <div style=${{display:"flex",gap:6,justifyContent:"center"}}>
+                        <button onClick=${()=>setViewStudent(s)} style=${{background:F.blueLinkLight,border:`1px solid ${F.blueLink}`,color:F.blueLink,borderRadius:3,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}}>View</button>
+                        <button onClick=${()=>setConfirmReset(s)} style=${{background:"none",border:`1px solid ${F.red}`,color:F.red,borderRadius:3,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>Reset</button>
+                      </div>
+                    </td>
+                  </tr>`)}
+                </tbody>
+              </table>
+            </div>`}
+          </div>`}
+        </div>
+      </div>
+    </div>
+
+    ${showCreate&&html`<${Modal} title="Create New Class" onClose=${()=>setShowCreate(false)} width=${400}>
+      <div style=${{padding:20}}>
+        <div style=${{marginBottom:12}}><${FField} label="Class Name" value=${newName} onChange=${setNewName} placeholder="e.g. Period 3 — Finance" autoFocus=${true}/></div>
+        <div style=${{marginBottom:20}}><${FField} label="Starting Balance ($)" value=${newBal} onChange=${setNewBal} placeholder="25000"/></div>
+        <div style=${{display:"flex",gap:10}}>
+          <button onClick=${createClass} disabled=${creating} style=${{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"8px 20px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>${creating&&html`<${Spinner} size=${14}/>`}Create Class</button>
+          <button onClick=${()=>setShowCreate(false)} style=${{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"8px 16px",fontSize:13,cursor:"pointer"}}>Cancel</button>
+        </div>
+      </div>
+    <//>`}
+
+    ${editClass&&html`<${Modal} title=${"Class Settings — "+editClass.name} onClose=${()=>setEditClass(null)} width=${480}>
+      <div style=${{padding:20}}>
+        ${newCode&&html`<div style=${{background:F.greenLight,border:`1px solid ${F.greenBorder}`,borderRadius:3,padding:"10px 14px",marginBottom:14,fontSize:13}}>✓ New code: <strong style=${{color:F.green,letterSpacing:2,fontSize:16}}>${newCode}</strong></div>`}
+        <div style=${{marginBottom:12}}><${FField} label="Class Name" value=${editName} onChange=${setEditName}/></div>
+        <div style=${{marginBottom:16}}><${FField} label="Starting Balance ($)" value=${editBal} onChange=${setEditBal}/></div>
+        <div style=${{display:"flex",gap:10,marginBottom:20}}>
+          <button onClick=${saveEditClass} disabled=${editSaving} style=${{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"8px 20px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>${editSaving&&html`<${Spinner} size=${14}/>`}Save</button>
+          <button onClick=${()=>setEditClass(null)} style=${{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"8px 16px",fontSize:13,cursor:"pointer"}}>Cancel</button>
+        </div>
+        <div style=${{borderTop:`1px solid ${F.borderLight}`,paddingTop:14,display:"flex",gap:10,flexWrap:"wrap"}}>
+          ${!confirmRegenCode?html`<button onClick=${()=>setConfirmRegenCode(true)} style=${{background:"none",border:`1px solid ${F.gold}`,color:F.gold,borderRadius:3,padding:"6px 14px",fontSize:12,cursor:"pointer",fontWeight:600}}>🔄 New Class Code</button>`:
+          html`<div style=${{background:F.goldLight,border:"1px solid #ffe08a",borderRadius:3,padding:"8px 12px",fontSize:12,display:"flex",gap:8,alignItems:"center"}}>
+            <span>Old code stops working. Continue?</span>
+            <button onClick=${regenCode} disabled=${editSaving} style=${{background:F.gold,color:"#fff",border:"none",borderRadius:3,padding:"3px 10px",fontSize:12,cursor:"pointer",fontWeight:700}}>Yes</button>
+            <button onClick=${()=>setConfirmRegenCode(false)} style=${{background:"none",border:"none",cursor:"pointer",color:F.textSecond,fontSize:12}}>Cancel</button>
+          </div>`}
+          ${!confirmDelClass?html`<button onClick=${()=>setConfirmDelClass(true)} style=${{background:"none",border:`1px solid ${F.red}`,color:F.red,borderRadius:3,padding:"6px 14px",fontSize:12,cursor:"pointer",fontWeight:600}}>🗑 Delete Class</button>`:
+          html`<div style=${{background:F.redLight,border:"1px solid #ffb3b3",borderRadius:3,padding:"8px 12px",fontSize:12,display:"flex",gap:8,alignItems:"center"}}>
+            <span>Delete <strong>${editClass.name}</strong>? Cannot be undone.</span>
+            <button onClick=${deleteClass} disabled=${editSaving} style=${{background:F.red,color:"#fff",border:"none",borderRadius:3,padding:"3px 10px",fontSize:12,cursor:"pointer",fontWeight:700}}>Delete</button>
+            <button onClick=${()=>setConfirmDelClass(false)} style=${{background:"none",border:"none",cursor:"pointer",color:F.textSecond,fontSize:12}}>Cancel</button>
+          </div>`}
+        </div>
+      </div>
+    <//>`}
+
+    ${confirmReset&&html`<${Modal} title="Confirm Reset" onClose=${()=>setConfirmReset(null)} headerBg="#6b1a1a">
+      <div style=${{padding:20}}>
+        <div style=${{fontSize:13,color:F.textSecond,marginBottom:14}}>
+          ${confirmReset==="all"?`Reset ALL ${students.length} students in "${activeClass.name}"?`:`Reset ${confirmReset.profile.full_name||confirmReset.profile.email}? All their trades and stocks will be deleted.`}
+        </div>
+        <div style=${{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick=${()=>setConfirmReset(null)} style=${{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"8px 16px",fontSize:13,cursor:"pointer"}}>Cancel</button>
+          <button onClick=${()=>confirmReset==="all"?resetAll():resetStudent(confirmReset)} disabled=${resetting} style=${{background:F.red,color:F.white,border:"none",borderRadius:3,padding:"8px 20px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>${resetting&&html`<${Spinner} size=${14}/>`}Yes, Reset</button>
+        </div>
+      </div>
+    <//>`}
+  </div>`;
+}
+
+// ─── Auth Screen ──────────────────────────────────────────────────────────────
+function AuthScreen({onAuth}){
+  const[mode,setMode]=useState("login");
+  const[role,setRole]=useState("student");
+  const[email,setEmail]=useState("");
+  const[password,setPassword]=useState("");
+  const[name,setName]=useState("");
+  const[classCode,setClassCode]=useState("");
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState(null);
+  const[success,setSuccess]=useState(null);
+  const[forgotMode,setForgotMode]=useState(false);
+  const[forgotEmail,setForgotEmail]=useState("");
+  const[forgotSent,setForgotSent]=useState(false);
+
+  const authInp={...inp,background:"#1a2e3f",border:"1px solid #2a4a60",color:"#fff",padding:"9px 12px",fontSize:14};
+
+  const login=async e=>{
+    e.preventDefault();setLoading(true);setError(null);
+    const{data,error:err}=await sb.auth.signInWithPassword({email,password});
+    if(err){setError(err.message);setLoading(false);return;}
+    const{data:prof}=await sb.from("profiles").select("*").eq("id",data.user.id).single();
+    onAuth(prof);setLoading(false);
+  };
+  const signup=async e=>{
+    e.preventDefault();setLoading(true);setError(null);
+    let classId=null,startingBal=25000;
+    if(role==="student"){
+      if(!classCode.trim()){setError("Enter the class code from your teacher.");setLoading(false);return;}
+      const{data:cls}=await sb.from("classes").select("*").eq("class_code",classCode.trim().toUpperCase()).single();
+      if(!cls){setError("Invalid class code. Check with your teacher.");setLoading(false);return;}
+      classId=cls.id;startingBal=cls.starting_balance||25000;
+    }
+    const{data,error:err}=await sb.auth.signUp({email,password,options:{data:{full_name:name}}});
+    if(err){setError(err.message);setLoading(false);return;}
+    if(data.user){
+      await sb.from("profiles").update({full_name:name.trim()||null,role,class_id:classId,starting_balance:startingBal}).eq("id",data.user.id);
+      const{data:prof}=await sb.from("profiles").select("*").eq("id",data.user.id).single();
+      if(prof){onAuth(prof);setLoading(false);return;}
+    }
+    setSuccess("Account created! Check your email to confirm, then sign in.");
+    setLoading(false);
+  };
+  const sendForgot=async e=>{e.preventDefault();setLoading(true);await sb.auth.resetPasswordForEmail(forgotEmail);setForgotSent(true);setLoading(false);};
+
+  return html`<div style=${{minHeight:"100vh",background:F.bgBanner,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div style=${{width:"100%",maxWidth:420}}>
+      <div style=${{textAlign:"center",marginBottom:32}}>
+        <div style=${{width:56,height:56,borderRadius:"50%",background:F.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 12px"}}>📈</div>
+        <h1 style=${{color:"#fff",fontSize:24,fontWeight:800,marginBottom:4}}>Options Learning Platform</h1>
+        <p style=${{color:"#5a7a95",fontSize:14}}>Paper trading for the classroom</p>
+      </div>
+      <div style=${{background:"#131f2a",border:"1px solid #1e3247",borderRadius:8,overflow:"hidden",boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}}>
+        ${forgotMode?html`<div style=${{padding:24}}>
+          ${!forgotSent?html`<div>
+            <div style=${{fontWeight:700,color:"#fff",marginBottom:12,fontSize:15}}>Reset Password</div>
+            <form onSubmit=${sendForgot}>
+              <div style=${{marginBottom:16}}><${FLabel}>Email<//>
+                <input type="email" value=${forgotEmail} onChange=${e=>setForgotEmail(e.target.value)} placeholder="you@example.com" style=${authInp}/>
+              </div>
+              <button type="submit" disabled=${loading} style=${{width:"100%",background:F.green,color:"#fff",border:"none",borderRadius:4,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>${loading&&html`<${Spinner} size=${14}/>`}Send Reset Email</button>
+            </form>
+          </div>`:html`<div style=${{textAlign:"center",padding:"16px 0"}}>
+            <div style=${{fontSize:32,marginBottom:12}}>📧</div>
+            <div style=${{color:"#86efac",fontWeight:700,marginBottom:8}}>Email sent!</div>
+            <div style=${{color:"#5a7a95",fontSize:13}}>Check your inbox for the reset link.</div>
+          </div>`}
+          <button onClick=${()=>{setForgotMode(false);setForgotSent(false);}} style=${{marginTop:16,background:"none",border:"none",color:"#5a7a95",fontSize:13,cursor:"pointer",width:"100%",textAlign:"center"}}>← Back to Sign In</button>
+        </div>`:html`<div>
+          <div style=${{display:"flex",borderBottom:"1px solid #1e3247"}}>
+            ${[["login","Sign In"],["signup","Sign Up"]].map(([m,label])=>html`<button key=${m} onClick=${()=>{setMode(m);setError(null);setSuccess(null);}} style=${{flex:1,background:mode===m?"#1a2e3f":"transparent",border:"none",color:mode===m?"#fff":"#5a7a95",padding:"14px 0",fontSize:14,cursor:"pointer",fontWeight:mode===m?700:400,borderBottom:mode===m?`2px solid ${F.green}`:"2px solid transparent"}}>${label}</button>`)}
+          </div>
+          <div style=${{padding:24}}>
+            ${error&&html`<div style=${{background:"#2a1a1a",border:"1px solid #cc3333",borderRadius:4,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#ff9999"}}>${error}</div>`}
+            ${success&&html`<div style=${{background:"#1a2a1a",border:`1px solid ${F.green}`,borderRadius:4,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#86efac"}}>${success}</div>`}
+            ${mode==="login"?html`<form onSubmit=${login}>
+              <div style=${{marginBottom:14}}><${FLabel}>Email<//>
+                <input type="email" value=${email} onChange=${e=>setEmail(e.target.value)} placeholder="you@example.com" style=${authInp}/>
+              </div>
+              <div style=${{marginBottom:8}}><${FLabel}>Password<//>
+                <input type="password" value=${password} onChange=${e=>setPassword(e.target.value)} placeholder="••••••••" style=${authInp}/>
+              </div>
+              <div style=${{textAlign:"right",marginBottom:20}}>
+                <button type="button" onClick=${()=>{setForgotMode(true);setForgotEmail(email);}} style=${{background:"none",border:"none",color:"#5a7a95",fontSize:12,cursor:"pointer"}}>Forgot password?</button>
+              </div>
+              <button type="submit" disabled=${loading} style=${{width:"100%",background:F.green,color:"#fff",border:"none",borderRadius:4,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>${loading&&html`<${Spinner} size=${14}/>`}Sign In</button>
+            </form>`:html`<form onSubmit=${signup}>
+              <div style=${{marginBottom:16}}>
+                <${FLabel}>I am a<//>
+                <div style=${{display:"flex",border:"1px solid #2a4a60",borderRadius:4,overflow:"hidden"}}>
+                  ${[["student","🎓 Student"],["teacher","👨‍🏫 Teacher"]].map(([r,label])=>html`<button key=${r} type="button" onClick=${()=>setRole(r)} style=${{flex:1,background:role===r?F.bgSubHeader:"transparent",border:"none",color:role===r?"#fff":"#5a7a95",padding:"10px 0",fontSize:13,cursor:"pointer",fontWeight:role===r?700:400}}>${label}</button>`)}
+                </div>
+              </div>
+              <div style=${{marginBottom:12}}><${FLabel}>Full Name<//>
+                <input value=${name} onChange=${e=>setName(e.target.value)} placeholder="Your name" style=${authInp}/>
+              </div>
+              <div style=${{marginBottom:12}}><${FLabel}>Email<//>
+                <input type="email" value=${email} onChange=${e=>setEmail(e.target.value)} placeholder="you@example.com" style=${authInp}/>
+              </div>
+              <div style=${{marginBottom:12}}><${FLabel}>Password<//>
+                <input type="password" value=${password} onChange=${e=>setPassword(e.target.value)} placeholder="At least 6 characters" style=${authInp}/>
+              </div>
+              ${role==="student"&&html`<div style=${{marginBottom:12}}>
+                <${FLabel}>Class Code<//>
+                <input value=${classCode} onChange=${e=>setClassCode(e.target.value.toUpperCase())} placeholder="e.g. FIN3A7" style=${{...authInp,fontFamily:"monospace",letterSpacing:2,fontSize:15,fontWeight:700}}/>
+                <div style=${{fontSize:11,color:"#5a7a95",marginTop:4}}>Get this from your teacher.</div>
+              </div>`}
+              <div style=${{height:8}}/>
+              <button type="submit" disabled=${loading} style=${{width:"100%",background:F.green,color:"#fff",border:"none",borderRadius:4,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>${loading&&html`<${Spinner} size=${14}/>`}Create Account</button>
+            </form>`}
+          </div>
+        </div>`}
+      </div>
+      <p style=${{textAlign:"center",color:"#3a5a70",fontSize:12,marginTop:20}}>Paper Trading Only — Educational purposes only.</p>
+    </div>
+  </div>`;
+}
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
+function App(){
+  const[profile,setProfile]=useState(null);
+  const[checking,setChecking]=useState(true);
+  useEffect(()=>{
+    sb.auth.getSession().then(async({data:{session}})=>{
+      if(session){const{data:p}=await sb.from("profiles").select("*").eq("id",session.user.id).single();setProfile(p||null);}
+      setChecking(false);
+    });
+    const{data:{subscription}}=sb.auth.onAuthStateChange(async(event,session)=>{
+      if(!session){setProfile(null);return;}
+      if(event==="SIGNED_IN"){const{data:p}=await sb.from("profiles").select("*").eq("id",session.user.id).single();setProfile(p||null);}
+    });
+    return()=>subscription.unsubscribe();
+  },[]);
+  const signOut=async()=>{await sb.auth.signOut();setProfile(null);};
+  if(checking)return html`<div style=${{minHeight:"100vh",background:F.bgBanner,display:"flex",alignItems:"center",justifyContent:"center"}}><${Spinner} size=${40}/></div>`;
+  if(!profile)return html`<${AuthScreen} onAuth=${setProfile}/>`;
+  if(profile.role==="teacher"||profile.role==="admin")return html`<${TeacherDashboard} profile=${profile} onSignOut=${signOut}/>`;
+  return html`<${StudentDashboard} profile=${profile} onSignOut=${signOut}/>`;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>
