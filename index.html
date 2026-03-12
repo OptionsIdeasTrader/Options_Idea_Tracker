@@ -27,8 +27,8 @@ const { useState, useEffect, useCallback } = React;
 // SUPABASE CONFIG — replace the two strings below with your own values
 // Supabase → Settings → API → Project URL + anon public key
 // ─────────────────────────────────────────────────────────────────────────────
-const SUPABASE_URL  = https://efsgzcvktaowwlqsidnk.supabase.co;
-const SUPABASE_ANON = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmc2d6Y3ZrdGFvd3dscXNpZG5rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzMzIwNzUsImV4cCI6MjA4ODkwODA3NX0.nRd58ZhWpAcX8qCsjuVqptvgmbcrptY9HDEPA-e89ro;
+const SUPABASE_URL  = "https://efsgzcvktaowwlqsidnk.supabase.co";
+const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmc2d6Y3ZrdGFvd3dscXNpZG5rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzMzIwNzUsImV4cCI6MjA4ODkwODA3NX0.nRd58ZhWpAcX8qCsjuVqptvgmbcrptY9HDEPA-e89ro";
 let sb;
 try {
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
