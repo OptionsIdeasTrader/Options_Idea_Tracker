@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Options Learning Platform</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.7/dist/umd/supabase.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;background:#f4f4f4;}
+    input,select,textarea,button{font-family:inherit;}
+    ::-webkit-scrollbar{width:8px;height:8px;}
+    ::-webkit-scrollbar-track{background:#f0f0f0;}
+    ::-webkit-scrollbar-thumb{background:#bbb;border-radius:4px;}
+    @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+    .row-hover:hover{background:#f0f7f0!important;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const R = React;
+const e = React.createElement;
+const {useState, useEffect} = React;
+
+const sb = window.supabase.createClient(
+  "https://efsgzcvktaowwlqsidnk.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmc2d6Y3ZrdGFvd3dscXNpZG5rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzMzIwNzUsImV4cCI6MjA4ODkwODA3NX0.nRd58ZhWpAcX8qCsjuVqptvgmbcrptY9HDEPA-e89ro"
+);
+
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const F = {
+  green:"#267C2C", greenLight:"#e8f5e9", greenBorder:"#b2dfb4",
+  white:"#ffffff", bgPage:"#f4f4f4", bgPanel:"#ffffff",
+  bgHeader:"#1C2B39", bgSubHeader:"#2E4459", bgBanner:"#0d1821",
+  borderLight:"#d0d0d0", borderMid:"#b0b0b0",
+  textPrimary:"#1a1a1a", textSecond:"#555555", textMuted:"#888888",
+  red:"#CC0000", redLight:"#fff0f0",
+  blueLink:"#0A6FBA", blueLinkLight:"#eff6ff",
+  rowAlt:"#fafafa", gold:"#B8860B", goldLight:"#fff8e1",
+  purple:"#6D28D9", purpleLight:"#ede9fe", purpleBorder:"#c4b5fd",
+  indigo:"#3730A3", indigoLight:"#f5f3ff", indigoBorder:"#c7d2fe",
+};
+
+// ─── Strategies ───────────────────────────────────────────────────────────────
+const STRATS = [
+  {name:"Covered Call",type:"sell",margin:false},
+  {name:"Cash-Secured Put",type:"sell",margin:false},
+  {name:"Bull Put Spread",type:"sell",margin:false},
+  {name:"Bear Call Spread",type:"sell",margin:false},
+  {name:"Iron Condor",type:"sell",margin:true},
+  {name:"Iron Butterfly",type:"sell",margin:true},
+  {name:"Straddle (Short)",type:"sell",margin:true},
+  {name:"Strangle (Short)",type:"sell",margin:true},
+  {name:"Jade Lizard",type:"sell",margin:true},
+  {name:"PMCC (Poor Man's Covered Call)",type:"sell",margin:false},
+  {name:"Diagonal Spread",type:"sell",margin:false},
+  {name:"Calendar Spread",type:"sell",margin:false},
+  {name:"Ratio Spread",type:"sell",margin:true},
+  {name:"Naked Put",type:"sell",margin:true},
+  {name:"Naked Call",type:"sell",margin:true},
+  {name:"Long Call",type:"buy",margin:false},
+  {name:"Long Put",type:"buy",margin:false},
+  {name:"Bull Call Spread",type:"buy",margin:false},
+  {name:"Bear Put Spread",type:"buy",margin:false},
+  {name:"Straddle (Long)",type:"buy",margin:false},
+  {name:"Strangle (Long)",type:"buy",margin:false},
+];
+const SMAP = Object.fromEntries(STRATS.map(s=>[s.name,s]));
+const MARGIN_STRATS = STRATS.filter(s=>s.margin).map(s=>s.name);
+const DIV_STRATS = ["Covered Call","Cash-Secured Put","PMCC (Poor Man's Covered Call)"];
+const ASSIGN_STRATS = ["Covered Call","Cash-Secured Put"];
+const STATUSES = ["Open","Closed","Expired","Rolled Out"];
+const STOCK_STATUSES = ["Holding","Sold","Assigned Away"];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const todayStr = () => new Date().toISOString().split("T")[0];
+const pN = v => parseFloat(v)||0;
+const fmtD = n => "$"+Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const gd = s => SMAP[s]||{type:"sell",margin:false};
+const oq = t => 100*(parseInt(t.contracts)||1);
+const dte = d => !d?null:Math.ceil((new Date(d+"T23:59:59")-new Date())/86400000);
+const genCode = () => Math.random().toString(36).substring(2,8).toUpperCase();
+
+const rtr = r => ({
+  id:r.id, ticker:r.ticker||"", strategy:r.strategy||"Covered Call",
+  expiry:r.expiry||"", strikeShort:r.strike_short?.toString()||"",
+  strikeLong:r.strike_long?.toString()||"", premium:r.premium?.toString()||"",
+  contracts:r.contracts?.toString()||"1", currentValue:r.current_value?.toString()||"",
+  status:r.status||"Open", openDate:r.open_date||"", closeDate:r.close_date||"",
+  stockPrice:r.stock_price?.toString()||"", costBasis:r.cost_basis?.toString()||"",
+  thesis:r.thesis||"", notes:r.notes||"",
+  divAmount:r.div_amount?.toString()||"", divExDate:r.div_ex_date||"",
+  divPayDate:r.div_pay_date||"", divCount:r.div_count?.toString()||"0",
+});
+const ttr = (t,uid) => ({
+  user_id:uid, ticker:(t.ticker||"").toUpperCase(), strategy:t.strategy,
+  expiry:t.expiry||null, strike_short:pN(t.strikeShort)||null,
+  strike_long:pN(t.strikeLong)||null, premium:pN(t.premium)||null,
+  contracts:parseInt(t.contracts)||1, current_value:pN(t.currentValue)||null,
+  status:t.status, open_date:t.openDate||null, close_date:t.closeDate||null,
+  stock_price:pN(t.stockPrice)||null, cost_basis:pN(t.costBasis)||null,
+  thesis:t.thesis||null, notes:t.notes||null,
+  div_amount:pN(t.divAmount)||null, div_ex_date:t.divExDate||null,
+  div_pay_date:t.divPayDate||null, div_count:parseInt(t.divCount)||0,
+  updated_at:new Date().toISOString(),
+});
+const rts = r => ({
+  id:r.id, ticker:r.ticker||"", shares:r.shares?.toString()||"",
+  buyPrice:r.buy_price?.toString()||"", buyDate:r.buy_date||"",
+  currentPrice:r.current_price?.toString()||"", status:r.status||"Holding",
+  sellPrice:r.sell_price?.toString()||"", sellDate:r.sell_date||"", notes:r.notes||"",
+});
+const str = (s,uid) => ({
+  user_id:uid, ticker:(s.ticker||"").toUpperCase(), shares:parseInt(s.shares)||0,
+  buy_price:pN(s.buyPrice)||null, buy_date:s.buyDate||null,
+  current_price:pN(s.currentPrice)||null, status:s.status,
+  sell_price:pN(s.sellPrice)||null, sell_date:s.sellDate||null, notes:s.notes||null,
+});
+
+// ─── Calculations ─────────────────────────────────────────────────────────────
+const calcPnl = t => {
+  if (!t.premium||!t.currentValue) return null;
+  const diff = pN(t.premium)-pN(t.currentValue);
+  return gd(t.strategy).type==="sell" ? diff*oq(t) : -diff*oq(t);
+};
+const calcMax = t => {
+  const q=oq(t), p=pN(t.premium)*q;
+  if (t.strategy==="Covered Call"&&t.costBasis&&t.strikeShort)
+    return p+(pN(t.strikeShort)-pN(t.costBasis))*q;
+  return p;
+};
+const calcPct = t => {
+  if (gd(t.strategy).type!=="sell"||!t.premium||!t.currentValue) return null;
+  const mp=calcMax(t); if(mp<=0) return null;
+  return ((pN(t.premium)-pN(t.currentValue))*oq(t)/mp)*100;
+};
+const calcDiv = t => (!t.divAmount||!t.divCount||parseInt(t.divCount)===0)?0:pN(t.divAmount)*parseInt(t.divCount)*oq(t);
+const calcYld = t => (!t.premium||!t.stockPrice)?null:(pN(t.premium)/pN(t.stockPrice))*100;
+const calcStkPnl = s => {
+  const sh=parseInt(s.shares)||0, cost=pN(s.buyPrice)*sh;
+  if (!s.buyPrice||!sh) return null;
+  if (s.status==="Holding"&&s.currentPrice) return pN(s.currentPrice)*sh-cost;
+  if ((s.status==="Sold"||s.status==="Assigned Away")&&s.sellPrice) return pN(s.sellPrice)*sh-cost;
+  return null;
+};
+const calcTotal = (trades,stocks,sb2) => {
+  const start=pN(sb2);
+  const optImp=trades.reduce((s,t)=>{
+    if(!t.premium) return s;
+    const p=pN(t.premium)*oq(t), sell=gd(t.strategy).type==="sell";
+    const cv=t.status==="Closed"&&t.currentValue?pN(t.currentValue)*oq(t):0;
+    return sell?s+p-cv:s-p+cv;
+  },0);
+  const stkImp=stocks.reduce((s,st)=>{
+    const sh=parseInt(st.shares)||0; if(!st.buyPrice||!sh) return s;
+    let imp=-pN(st.buyPrice)*sh;
+    if((st.status==="Sold"||st.status==="Assigned Away")&&st.sellPrice) imp+=pN(st.sellPrice)*sh;
+    return s+imp;
+  },0);
+  const divInc=trades.reduce((s,t)=>s+calcDiv(t),0);
+  const cash=start+optImp+stkImp+divInc;
+  const optMark=trades.filter(t=>t.status==="Open"&&t.currentValue).reduce((s,t)=>{
+    const cv=pN(t.currentValue)*oq(t);
+    return gd(t.strategy).type==="sell"?s-cv:s+cv;
+  },0);
+  const stkMkt=stocks.filter(s=>s.status==="Holding"&&s.currentPrice)
+    .reduce((s,st)=>s+pN(st.currentPrice)*(parseInt(st.shares)||0),0);
+  return {cash,optMark,stkMkt,total:cash+optMark+stkMkt,divInc,optImp,stkImp};
+};
+
+// ─── Style helpers ────────────────────────────────────────────────────────────
+const inp = {width:"100%",border:`1px solid ${F.borderLight}`,borderRadius:3,padding:"5px 8px",fontSize:13,color:F.textPrimary,background:F.white,outline:"none"};
+const thS = {padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:F.textSecond,background:"#e8ede8",whiteSpace:"nowrap",borderBottom:`1px solid ${F.borderMid}`};
+const tdS = {padding:"8px 10px",fontSize:12,color:F.textPrimary,verticalAlign:"middle"};
+
+// ─── Atoms ────────────────────────────────────────────────────────────────────
+function Spinner({size=16}) {
+  return e("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(255,255,255,0.2)",borderTop:`2px solid ${F.green}`,borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}});
+}
+function FLabel({children}) {
+  return e("div",{style:{fontSize:12,color:F.textSecond,marginBottom:3,fontWeight:600}},children);
+}
+function FField({label,value,onChange,type="text",placeholder,disabled,autoFocus}) {
+  return e("div",null,
+    e(FLabel,null,label),
+    e("input",{autoFocus,type,value,onChange:ev=>onChange(ev.target.value),placeholder,disabled,style:{...inp,opacity:disabled?0.6:1}})
+  );
+}
+function FSelect({label,value,onChange,options}) {
+  return e("div",null,
+    e(FLabel,null,label),
+    e("select",{value,onChange:ev=>onChange(ev.target.value),style:inp},
+      options.map(o=>e("option",{key:o},o))
+    )
+  );
+}
+function SecLabel({children,color}) {
+  return e("div",{style:{fontSize:10,fontWeight:700,color:color||F.textMuted,textTransform:"uppercase",letterSpacing:1,marginBottom:8,borderBottom:`1px solid ${color?color+"44":F.borderLight}`,paddingBottom:4}},children);
+}
+function SummaryItem({label,value,color,sub}) {
+  return e("div",null,
+    e("div",{style:{fontSize:11,color:F.textMuted,marginBottom:2,textTransform:"uppercase",letterSpacing:0.5}},label),
+    e("div",{style:{fontSize:18,fontWeight:700,color:color||F.textPrimary}},value),
+    sub&&e("div",{style:{fontSize:10,color:F.textMuted,marginTop:1}},sub)
+  );
+}
+function Btn({children,onClick,disabled,style:s={},color=F.green,outline=false}) {
+  const base={border:`1px solid ${color}`,borderRadius:3,padding:"7px 16px",fontSize:13,cursor:"pointer",fontWeight:600,display:"flex",alignItems:"center",gap:6,opacity:disabled?0.5:1};
+  const st=outline?{...base,background:"none",color,...s}:{...base,background:color,color:"#fff",border:"none",...s};
+  return e("button",{onClick,disabled,style:st},children);
+}
+function Modal({onClose,title,width=440,children,headerBg}) {
+  return e("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}},
+    e("div",{style:{background:F.white,borderRadius:6,width,maxWidth:"100%",boxShadow:"0 8px 40px rgba(0,0,0,0.3)",overflow:"hidden"}},
+      e("div",{style:{background:headerBg||F.bgHeader,color:"#fff",padding:"13px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        e("span",{style:{fontWeight:700,fontSize:14}},title),
+        onClose&&e("button",{onClick:onClose,style:{background:"transparent",border:"1px solid rgba(255,255,255,0.35)",color:"#fff",borderRadius:3,padding:"3px 10px",fontSize:12,cursor:"pointer"}},"✕")
+      ),
+      children
+    )
+  );
+}
+
+// ─── PnlCell ──────────────────────────────────────────────────────────────────
+function PnlCell({trade,onUpdate}) {
+  const [edit,setEdit]=useState(false);
+  const [val,setVal]=useState(trade.currentValue||"");
+  const pnl=calcPnl(trade), pct=calcPct(trade), mp=calcMax(trade), div=calcDiv(trade);
+  const col=pnl===null?"#aaa":pnl>=0?F.green:F.red;
+  return e("div",null,
+    e("div",{style:{display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}},
+      !edit?[
+        e("span",{key:"v",style:{fontWeight:700,color:col}},pnl===null?"—":`${pnl>=0?"+":"-"}${fmtD(pnl)}`),
+        trade.status==="Open"&&e("button",{key:"eb",onClick:()=>{setVal(trade.currentValue||"");setEdit(true);},style:{background:"none",border:`1px solid ${F.borderLight}`,borderRadius:2,fontSize:10,color:F.blueLink,cursor:"pointer",padding:"1px 5px"}},"Edit")
+      ]:[
+        e("input",{key:"i",autoFocus:true,value:val,onChange:ev=>setVal(ev.target.value),style:{width:64,padding:"2px 5px",fontSize:12,border:`1px solid ${F.green}`,borderRadius:2,outline:"none"},
+          onKeyDown:ev=>{if(ev.key==="Enter"){onUpdate(trade.id,val);setEdit(false);}if(ev.key==="Escape")setEdit(false);}}),
+        e("button",{key:"ok",onClick:()=>{onUpdate(trade.id,val);setEdit(false);},style:{background:F.green,color:"#fff",border:"none",borderRadius:2,fontSize:10,cursor:"pointer",padding:"2px 6px"}},"✓"),
+        e("button",{key:"x",onClick:()=>setEdit(false),style:{background:"#fff",color:F.textMuted,border:`1px solid ${F.borderLight}`,borderRadius:2,fontSize:10,cursor:"pointer",padding:"2px 5px"}},"✕"),
+      ]
+    ),
+    pct!==null&&e("div",{style:{marginTop:3}},
+      e("div",{style:{height:3,background:"#e0e0e0",borderRadius:2,width:80}},
+        e("div",{style:{height:3,background:pct>=50?F.green:F.gold,borderRadius:2,width:`${Math.min(100,Math.max(0,pct))}%`}})
+      ),
+      e("div",{style:{fontSize:10,color:F.textMuted,marginTop:1}},`${pct.toFixed(0)}% of ${fmtD(mp)} max`)
+    ),
+    div>0&&e("div",{style:{fontSize:10,color:F.purple,marginTop:2,fontWeight:600}},`💰 +${fmtD(div)} div`)
+  );
+}
+
+// ─── Assignment Panel ─────────────────────────────────────────────────────────
+function AssignPanel({t}) {
+  const strike=pN(t.strikeShort), prem=pN(t.premium);
+  if (!strike||!prem) return null;
+  const q=oq(t), pt=prem*q, basis=pN(t.costBasis)||null;
+  const isCsp=t.strategy==="Cash-Secured Put";
+  const ap=basis?(isCsp?(strike-basis)*q*-1+pt:(strike-basis)*q+pt):null;
+  const be=basis?basis-prem:null;
+  const ec=isCsp?strike-prem:null;
+  return e("div",{style:{background:F.indigoLight,border:`1px solid ${F.indigoBorder}`,borderRadius:4,overflow:"hidden",marginBottom:14}},
+    e("div",{style:{background:F.indigo,color:"#fff",padding:"7px 14px",fontSize:12,fontWeight:700}},`⚖️ Assignment Risk — ${t.ticker} · Strike $${strike.toFixed(2)}`),
+    e("div",{style:{padding:"10px 14px",fontSize:12}},
+      e("div",{style:{marginBottom:6}},e("strong",null,"Scenario A — Expires Worthless: "),e("span",{style:{color:F.green,fontWeight:700}},`Keep +${fmtD(pt)}`)),
+      e("div",{style:{marginBottom:4}},e("strong",null,`Scenario B — Assigned at $${strike.toFixed(2)}: `)),
+      isCsp?[
+        e("div",{key:"a"},`Buy ${q} shares at $${strike.toFixed(2)}: -${fmtD(strike*q)}`),
+        ec&&e("div",{key:"b",style:{color:F.blueLink,fontWeight:700}},`Effective cost/share after premium: $${ec.toFixed(2)}`),
+      ]:[
+        e("div",{key:"a"},`Shares sold at $${strike.toFixed(2)}: +${fmtD(strike*q)}`),
+        ap!==null&&e("div",{key:"b",style:{color:ap>=0?F.green:F.red,fontWeight:700}},`Net profit: ${ap>=0?"+":"-"}${fmtD(ap)}`),
+        be!==null&&e("div",{key:"c",style:{color:F.gold}},`Break-even: $${be.toFixed(2)}/share`),
+      ]
+    )
+  );
+}
+
+// ─── Trade Form ───────────────────────────────────────────────────────────────
+function TradeForm({initial,onSave,onCancel,saving}) {
+  const blank={id:null,ticker:"",strategy:"Covered Call",expiry:"",strikeShort:"",strikeLong:"",premium:"",contracts:"1",currentValue:"",status:"Open",openDate:todayStr(),closeDate:"",stockPrice:"",costBasis:"",thesis:"",notes:"",divAmount:"",divExDate:"",divPayDate:"",divCount:""};
+  const [f,setF]=useState(initial||blank);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const def=gd(f.strategy),isBuy=def.type==="buy",isEdit=!!f.id;
+  const showDiv=DIV_STRATS.includes(f.strategy),showAssign=ASSIGN_STRATS.includes(f.strategy);
+  const pt=f.premium&&f.contracts?(pN(f.premium)*100*parseInt(f.contracts)).toFixed(2):null;
+  const yld=f.premium&&f.stockPrice?((pN(f.premium)/pN(f.stockPrice))*100).toFixed(2):null;
+  return e("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:1500,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:28,overflowY:"auto"}},
+    e("div",{style:{background:F.white,borderRadius:6,width:820,maxWidth:"95%",boxShadow:"0 8px 40px rgba(0,0,0,0.25)",overflow:"hidden",marginBottom:40}},
+      e("div",{style:{background:isEdit?F.bgSubHeader:F.bgHeader,color:"#fff",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        e("span",{style:{fontWeight:700,fontSize:15}},isEdit?"✏️ Edit Trade":"＋ New Trade Idea"),
+        e("button",{onClick:onCancel,style:{background:"transparent",border:"1px solid rgba(255,255,255,0.4)",color:"#fff",borderRadius:3,padding:"4px 12px",fontSize:12,cursor:"pointer"}},"✕ Cancel")
+      ),
+      e("div",{style:{padding:18}},
+        e(SecLabel,null,"Trade Details"),
+        e("div",{style:{display:"grid",gridTemplateColumns:"1fr 2fr 1fr 1fr",gap:12,marginBottom:12}},
+          e(FField,{label:"Symbol",value:f.ticker,onChange:v=>set("ticker",v.toUpperCase()),placeholder:"AAPL"}),
+          e("div",null,
+            e(FLabel,null,def.margin?"Strategy ⚠ Margin":isBuy?"Strategy (Buyer)":"Strategy"),
+            e("select",{value:f.strategy,onChange:ev=>set("strategy",ev.target.value),style:inp},
+              e("optgroup",{label:"── Sellers (Credit) ──"},STRATS.filter(s=>s.type==="sell").map(s=>e("option",{key:s.name},s.name))),
+              e("optgroup",{label:"── Buyers (Debit) ──"},STRATS.filter(s=>s.type==="buy").map(s=>e("option",{key:s.name},s.name)))
+            )
+          ),
+          e(FField,{label:"Open Date",value:f.openDate,onChange:v=>set("openDate",v),type:"date"}),
+          e(FField,{label:"Expiry Date",value:f.expiry,onChange:v=>set("expiry",v),type:"date"})
+        ),
+        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:12}},
+          e(FField,{label:"Strike (Short)",value:f.strikeShort,onChange:v=>set("strikeShort",v),placeholder:"150.00"}),
+          e(FField,{label:"Strike (Long)",value:f.strikeLong,onChange:v=>set("strikeLong",v),placeholder:"145.00"}),
+          e(FField,{label:isBuy?"Debit Paid ($)":"Premium ($)",value:f.premium,onChange:v=>set("premium",v),placeholder:"2.50"}),
+          e(FField,{label:"Contracts",value:f.contracts,onChange:v=>set("contracts",v),type:"number",placeholder:"1"})
+        ),
+        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:12}},
+          e(FField,{label:"Current Mark",value:f.currentValue,onChange:v=>set("currentValue",v),placeholder:"1.20"}),
+          e(FField,{label:"Stock Price at Open",value:f.stockPrice,onChange:v=>set("stockPrice",v),placeholder:"228.00"}),
+          showAssign&&e(FField,{label:"Cost Basis/Share",value:f.costBasis,onChange:v=>set("costBasis",v),placeholder:"18.50"}),
+          e(FSelect,{label:"Status",value:f.status,onChange:v=>set("status",v),options:STATUSES})
+        ),
+        f.status!=="Open"&&e("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:12}},
+          e(FField,{label:"Close Date",value:f.closeDate,onChange:v=>set("closeDate",v),type:"date"})
+        ),
+        showAssign&&e(AssignPanel,{t:f}),
+        showDiv&&e("div",{style:{background:F.purpleLight,border:`1px solid ${F.purpleBorder}`,borderRadius:4,padding:"12px 14px",marginBottom:14}},
+          e(SecLabel,{color:F.purple},"💰 Dividend Tracking"),
+          e("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}},
+            e(FField,{label:"Div/Share ($)",value:f.divAmount,onChange:v=>set("divAmount",v),placeholder:"0.25"}),
+            e(FField,{label:"Ex-Date",value:f.divExDate,onChange:v=>set("divExDate",v),type:"date"}),
+            e(FField,{label:"Pay Date",value:f.divPayDate,onChange:v=>set("divPayDate",v),type:"date"}),
+            e(FField,{label:"# Collected",value:f.divCount,onChange:v=>set("divCount",v),type:"number",placeholder:"0"})
+          )
+        ),
+        e(SecLabel,null,"Notes"),
+        e("div",{style:{marginBottom:10}},
+          e(FLabel,null,"Thesis"),
+          e("textarea",{value:f.thesis,onChange:ev=>set("thesis",ev.target.value),placeholder:"Why this trade?",style:{...inp,minHeight:48,resize:"vertical"}})
+        ),
+        e("div",{style:{marginBottom:14}},
+          e(FLabel,null,"Notes / Adjustments"),
+          e("textarea",{value:f.notes,onChange:ev=>set("notes",ev.target.value),placeholder:"Rolls, lessons…",style:{...inp,minHeight:36,resize:"vertical"}})
+        ),
+        pt&&e("div",{style:{background:isBuy?"#eff6ff":F.greenLight,border:`1px solid ${isBuy?"#bfdbfe":F.greenBorder}`,borderRadius:3,padding:"8px 14px",marginBottom:14,fontSize:12,display:"flex",gap:16,flexWrap:"wrap"}},
+          e("span",null,e("strong",null,isBuy?"Total Debit:":"Total Premium:")," $"+pt),
+          !isBuy&&e("span",null,e("strong",null,"Max Profit:")," "+fmtD(calcMax(f))),
+          yld&&!isBuy&&e("span",null,e("strong",null,"Yield:")," "+yld+"%"),
+          def.margin&&e("span",{style:{color:F.gold,fontWeight:700}},"⚠ Margin required")
+        ),
+        e("div",{style:{display:"flex",gap:10}},
+          e("button",{onClick:()=>onSave(f),disabled:saving,style:{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"9px 24px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}},
+            saving&&e(Spinner,{size:14}),isEdit?"💾 Save Changes":"＋ Add Trade"
+          ),
+          e("button",{onClick:onCancel,style:{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"9px 18px",fontSize:13,cursor:"pointer"}},"Cancel")
+        )
+      )
+    )
+  );
+}
+
+// ─── Stock Form ───────────────────────────────────────────────────────────────
+function StockForm({initial,onSave,onCancel,saving}) {
+  const blank={id:null,ticker:"",shares:"",buyPrice:"",buyDate:todayStr(),currentPrice:"",status:"Holding",sellPrice:"",sellDate:"",notes:""};
+  const [f,setF]=useState(initial||blank);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const isEdit=!!f.id,isSold=f.status==="Sold"||f.status==="Assigned Away";
+  return e("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:1500,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:40,overflowY:"auto"}},
+    e("div",{style:{background:F.white,borderRadius:6,width:620,maxWidth:"95%",boxShadow:"0 8px 40px rgba(0,0,0,0.25)",overflow:"hidden",marginBottom:40}},
+      e("div",{style:{background:isEdit?F.bgSubHeader:F.bgHeader,color:"#fff",padding:"13px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        e("span",{style:{fontWeight:700,fontSize:15}},isEdit?"✏️ Edit Position":"📈 Buy Stock"),
+        e("button",{onClick:onCancel,style:{background:"transparent",border:"1px solid rgba(255,255,255,0.4)",color:"#fff",borderRadius:3,padding:"4px 12px",fontSize:12,cursor:"pointer"}},"✕")
+      ),
+      e("div",{style:{padding:20}},
+        e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:14}},
+          e(FField,{label:"Ticker",value:f.ticker,onChange:v=>set("ticker",v.toUpperCase()),placeholder:"AAPL"}),
+          e(FField,{label:"Shares",value:f.shares,onChange:v=>set("shares",v),type:"number",placeholder:"100"}),
+          e(FField,{label:"Buy Price ($)",value:f.buyPrice,onChange:v=>set("buyPrice",v),placeholder:"220.00"}),
+          e(FField,{label:"Buy Date",value:f.buyDate,onChange:v=>set("buyDate",v),type:"date"})
+        ),
+        e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:14}},
+          e(FField,{label:"Current Price ($)",value:f.currentPrice,onChange:v=>set("currentPrice",v),placeholder:"228.00"}),
+          e(FSelect,{label:"Status",value:f.status,onChange:v=>set("status",v),options:STOCK_STATUSES}),
+          isSold&&e(FField,{label:"Sell Price ($)",value:f.sellPrice,onChange:v=>set("sellPrice",v),placeholder:"235.00"}),
+          isSold&&e(FField,{label:"Sell Date",value:f.sellDate,onChange:v=>set("sellDate",v),type:"date"})
+        ),
+        e("div",{style:{marginBottom:14}},
+          e(FLabel,null,"Notes"),
+          e("textarea",{value:f.notes,onChange:ev=>set("notes",ev.target.value),style:{...inp,minHeight:42,resize:"vertical"}})
+        ),
+        e("div",{style:{display:"flex",gap:10}},
+          e("button",{onClick:()=>onSave(f),disabled:saving,style:{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"9px 24px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}},
+            saving&&e(Spinner,{size:14}),isEdit?"💾 Save":"📈 Add Position"
+          ),
+          e("button",{onClick:onCancel,style:{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"9px 18px",fontSize:13,cursor:"pointer"}},"Cancel")
+        )
+      )
+    )
+  );
+}
+
+// ─── Positions Tab ────────────────────────────────────────────────────────────
+function PositionsTab({trades,onEdit,onDelete,onAdd,updMark,readOnly}) {
+  const [filter,setFilter]=useState("All");
+  const [search,setSearch]=useState("");
+  const filtered=trades.filter(t=>filter==="All"||t.status===filter).filter(t=>!search||(t.ticker+t.strategy).toLowerCase().includes(search.toLowerCase()));
+  const open=trades.filter(t=>t.status==="Open");
+  const totPrem=trades.reduce((s,t)=>s+(t.premium&&gd(t.strategy).type==="sell"?pN(t.premium)*oq(t):0),0);
+  const totPnl=trades.reduce((s,t)=>s+(calcPnl(t)||0),0);
+  const totDiv=trades.reduce((s,t)=>s+calcDiv(t),0);
+  const colCount=readOnly?12:13;
+  return e("div",null,
+    !readOnly&&e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,marginBottom:14,padding:"10px 20px",display:"flex",gap:20,alignItems:"center",flexWrap:"wrap",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}},
+      e(SummaryItem,{label:"Open",value:open.length}),
+      e(SummaryItem,{label:"Total Trades",value:trades.length}),
+      e(SummaryItem,{label:"Premium Collected",value:"+"+fmtD(totPrem)}),
+      e(SummaryItem,{label:"Options P&L",value:(totPnl>=0?"+":"-")+fmtD(totPnl),color:totPnl>=0?F.green:F.red}),
+      totDiv>0&&e(SummaryItem,{label:"Dividends",value:"+"+fmtD(totDiv),color:F.purple}),
+      e(SummaryItem,{label:"Margin",value:open.filter(t=>MARGIN_STRATS.includes(t.strategy)).length,color:F.gold}),
+      e("div",{style:{marginLeft:"auto"}},
+        e("button",{onClick:onAdd,style:{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"7px 18px",fontSize:13,fontWeight:700,cursor:"pointer"}},"+ Add Trade Idea")
+      )
+    ),
+    e("div",{style:{display:"flex",gap:8,marginBottom:12,alignItems:"center",flexWrap:"wrap"}},
+      e("div",{style:{display:"flex",gap:0,flex:1,borderBottom:`1px solid ${F.borderLight}`}},
+        ["All",...STATUSES].map(s=>e("button",{key:s,onClick:()=>setFilter(s),style:{background:"none",border:"none",borderBottom:filter===s?`2px solid ${F.green}`:"2px solid transparent",color:filter===s?F.green:F.textSecond,fontSize:13,padding:"6px 16px",cursor:"pointer",fontWeight:filter===s?700:400,marginBottom:-1}},
+          s+" ",e("span",{style:{fontSize:11,color:"#aaa"}},"("+(s==="All"?trades.length:trades.filter(t=>t.status===s).length)+")")
+        ))
+      ),
+      e("input",{value:search,onChange:ev=>setSearch(ev.target.value),placeholder:"Search…",style:{padding:"5px 10px",borderRadius:3,border:`1px solid ${F.borderLight}`,fontSize:12,outline:"none",width:140}})
+    ),
+    e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,overflow:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}},
+      e("table",{style:{width:"100%",borderCollapse:"collapse",minWidth:1050}},
+        e("thead",null,e("tr",null,
+          ["Symbol","Strategy","Type","Strikes","Expiry","DTE","Qty","Premium","Yield%","P&L","Status","Acct",...(!readOnly?["Actions"]:[])].map(h=>e("th",{key:h,style:thS},h))
+        )),
+        e("tbody",null,
+          filtered.length===0?e("tr",null,e("td",{colSpan:colCount,style:{textAlign:"center",color:F.textMuted,padding:40}},trades.length===0?"No trades yet. Click + Add Trade Idea to start.":"No trades match this filter.")):
+          filtered.map((t,i)=>{
+            const d=dte(t.expiry),sc={Open:{color:F.green,bg:F.greenLight,border:F.greenBorder},Closed:{color:"#555",bg:"#f0f0f0",border:"#ccc"},Expired:{color:F.red,bg:F.redLight,border:"#ffb3b3"},"Rolled Out":{color:F.gold,bg:F.goldLight,border:"#ffe08a"}}[t.status]||{color:F.green,bg:F.greenLight,border:F.greenBorder};
+            const def2=gd(t.strategy),yld=calcYld(t);
+            const pTot=t.premium&&t.contracts?(pN(t.premium)*oq(t)).toFixed(0):null;
+            return e("tr",{key:t.id,style:{background:i%2===0?F.bgPanel:F.rowAlt,borderBottom:`1px solid ${F.borderLight}`}},
+              e("td",{style:{...tdS,fontWeight:700,color:F.blueLink}},t.ticker),
+              e("td",{style:tdS},
+                e("div",{style:{fontSize:12}},t.strategy),
+                t.thesis&&e("div",{style:{fontSize:10,color:F.textMuted,maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t.thesis)
+              ),
+              e("td",{style:tdS},e("span",{style:{fontSize:11,fontWeight:600,color:def2.type==="buy"?F.blueLink:F.green}},def2.type==="buy"?"📈 Buy":"📉 Sell")),
+              e("td",{style:{...tdS,fontFamily:"monospace",fontSize:12}},(t.strikeShort||"—")+(t.strikeLong?" / "+t.strikeLong:"")),
+              e("td",{style:{...tdS,fontFamily:"monospace",fontSize:12}},t.expiry||"—"),
+              e("td",{style:{...tdS,textAlign:"center",fontWeight:d!==null&&d<=7?700:400,color:d!==null&&d<=7?F.red:d!==null&&d<=14?F.gold:F.textSecond}},d!==null?d+"d":"—"),
+              e("td",{style:{...tdS,textAlign:"center"}},t.contracts),
+              e("td",{style:{...tdS,fontFamily:"monospace",fontSize:12}},t.premium?e("div",null,e("div",null,"$"+pN(t.premium).toFixed(2)),pTot&&e("div",{style:{fontSize:10,color:F.textMuted}},"$"+pTot+" total")):e("span",{style:{color:F.textMuted}},"—")),
+              e("td",{style:tdS},yld!==null?e("span",{style:{fontSize:12,fontWeight:600}},yld.toFixed(2)+"%"):e("span",{style:{color:F.textMuted}},"—")),
+              e("td",{style:tdS},readOnly?e("span",{style:{fontWeight:700,color:(calcPnl(t)||0)>=0?F.green:F.red}},((calcPnl(t)||0)>=0?"+":"-")+fmtD(calcPnl(t)||0)):e(PnlCell,{trade:t,onUpdate:updMark})),
+              e("td",{style:tdS},e("span",{style:{fontSize:11,fontWeight:700,color:sc.color,background:sc.bg,border:`1px solid ${sc.border}`,borderRadius:3,padding:"2px 8px"}},t.status)),
+              e("td",{style:tdS},MARGIN_STRATS.includes(t.strategy)?e("span",{style:{fontSize:11,color:F.gold,fontWeight:600}},"⚠ Margin"):e("span",{style:{fontSize:11,color:F.green}},"✓ Std")),
+              !readOnly&&e("td",{style:{...tdS,textAlign:"center"}},
+                e("div",{style:{display:"flex",gap:5,justifyContent:"center"}},
+                  e("button",{onClick:()=>onEdit(t),style:{background:F.blueLinkLight,border:`1px solid ${F.blueLink}`,color:F.blueLink,borderRadius:3,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}},"✏ Edit"),
+                  e("button",{onClick:()=>onDelete(t.id),style:{background:"none",border:`1px solid ${F.red}`,color:F.red,borderRadius:3,padding:"3px 8px",fontSize:11,cursor:"pointer"}},"✕")
+                )
+              )
+            );
+          })
+        )
+      )
+    )
+  );
+}
+
+// ─── Stock Holdings Tab ───────────────────────────────────────────────────────
+function StockTab({stocks,trades,onAdd,onEdit,onDelete,readOnly}) {
+  const [sub,setSub]=useState("all");
+  const vis=sub==="holding"?stocks.filter(s=>s.status==="Holding"):sub==="sold"?stocks.filter(s=>s.status==="Sold"):sub==="assigned"?stocks.filter(s=>s.status==="Assigned Away"):stocks;
+  const totCost=stocks.reduce((s,st)=>s+(pN(st.buyPrice)*(parseInt(st.shares)||0)),0);
+  const totPnl=stocks.reduce((s,st)=>s+(calcStkPnl(st)||0),0);
+  return e("div",null,
+    e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,marginBottom:14,padding:"10px 20px",display:"flex",gap:20,alignItems:"center",flexWrap:"wrap"}},
+      e(SummaryItem,{label:"Positions",value:stocks.length}),
+      e(SummaryItem,{label:"Total Cost",value:fmtD(totCost)}),
+      e(SummaryItem,{label:"Total P&L",value:(totPnl>=0?"+":"-")+fmtD(totPnl),color:totPnl>=0?F.green:F.red}),
+      !readOnly&&e("div",{style:{marginLeft:"auto"}},e("button",{onClick:onAdd,style:{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"7px 18px",fontSize:13,fontWeight:700,cursor:"pointer"}},"📈 Buy Stock"))
+    ),
+    e("div",{style:{display:"flex",gap:0,marginBottom:12,borderBottom:`1px solid ${F.borderLight}`}},
+      [["all","All"],["holding","Holding"],["sold","Sold"],["assigned","Assigned Away"]].map(([k,l])=>
+        e("button",{key:k,onClick:()=>setSub(k),style:{background:"none",border:"none",borderBottom:sub===k?`2px solid ${F.green}`:"2px solid transparent",color:sub===k?F.green:F.textSecond,fontSize:13,padding:"6px 16px",cursor:"pointer",fontWeight:sub===k?700:400,marginBottom:-1}},l)
+      )
+    ),
+    vis.length===0?e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:40,textAlign:"center",color:F.textMuted}},"No positions."):
+    e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,overflow:"auto"}},
+      e("table",{style:{width:"100%",borderCollapse:"collapse",minWidth:800}},
+        e("thead",null,e("tr",null,["Ticker","Shares","Buy Price","Buy Date","Current/Sale Price","Cost","P&L","Status",...(!readOnly?["Actions"]:[])].map(h=>e("th",{key:h,style:thS},h)))),
+        e("tbody",null,vis.map((st,i)=>{
+          const sh=parseInt(st.shares)||0,cost=pN(st.buyPrice)*sh,pnl=calcStkPnl(st);
+          const isClosed=st.status==="Sold"||st.status==="Assigned Away";
+          const ss={Holding:{color:F.green,bg:F.greenLight,border:F.greenBorder},Sold:{color:"#555",bg:"#f0f0f0",border:"#ccc"},"Assigned Away":{color:F.gold,bg:F.goldLight,border:"#ffe08a"}}[st.status]||{color:F.green,bg:F.greenLight,border:F.greenBorder};
+          return e("tr",{key:st.id,style:{background:i%2===0?F.bgPanel:F.rowAlt,borderBottom:`1px solid ${F.borderLight}`}},
+            e("td",{style:{...tdS,fontWeight:700,color:F.blueLink}},st.ticker),
+            e("td",{style:tdS},sh.toLocaleString()),
+            e("td",{style:{...tdS,fontFamily:"monospace"}},"$"+pN(st.buyPrice).toFixed(2)),
+            e("td",{style:{...tdS,fontSize:11,color:F.textSecond}},st.buyDate||"—"),
+            e("td",{style:{...tdS,fontFamily:"monospace"}},isClosed?(st.sellPrice?"$"+pN(st.sellPrice).toFixed(2):"—"):(st.currentPrice?"$"+pN(st.currentPrice).toFixed(2):"not set")),
+            e("td",{style:{...tdS,fontFamily:"monospace",color:F.textSecond}},fmtD(cost)),
+            e("td",{style:tdS},pnl!==null?e("span",{style:{fontWeight:700,color:pnl>=0?F.green:F.red}},(pnl>=0?"+":"-")+fmtD(pnl)):e("span",{style:{color:F.textMuted}},"—")),
+            e("td",{style:tdS},e("span",{style:{fontSize:11,fontWeight:700,color:ss.color,background:ss.bg,border:`1px solid ${ss.border}`,borderRadius:3,padding:"2px 8px"}},st.status)),
+            !readOnly&&e("td",{style:{...tdS,textAlign:"center"}},
+              e("div",{style:{display:"flex",gap:5,justifyContent:"center"}},
+                e("button",{onClick:()=>onEdit(st),style:{background:F.blueLinkLight,border:`1px solid ${F.blueLink}`,color:F.blueLink,borderRadius:3,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}},"✏ Edit"),
+                e("button",{onClick:()=>onDelete(st.id),style:{background:"none",border:`1px solid ${F.red}`,color:F.red,borderRadius:3,padding:"3px 8px",fontSize:11,cursor:"pointer"}},"✕")
+              )
+            )
+          );
+        }))
+      )
+    )
+  );
+}
+
+// ─── Analytics Tab ────────────────────────────────────────────────────────────
+function AnalyticsTab({trades,stocks}) {
+  const totOptPnl=trades.reduce((s,t)=>s+(calcPnl(t)||0),0);
+  const totDiv=trades.reduce((s,t)=>s+calcDiv(t),0);
+  const totStkPnl=stocks.reduce((s,st)=>s+(calcStkPnl(st)||0),0);
+  const totAll=totOptPnl+totDiv+totStkPnl;
+  const winners=trades.filter(t=>(calcPnl(t)||0)>0).length;
+  const losers=trades.filter(t=>(calcPnl(t)||0)<0).length;
+  const wr=trades.length>0?Math.round((winners/trades.length)*100):null;
+  const byStrat={};
+  trades.forEach(t=>{if(!byStrat[t.strategy])byStrat[t.strategy]={count:0,pnl:0,div:0};byStrat[t.strategy].count++;byStrat[t.strategy].pnl+=calcPnl(t)||0;byStrat[t.strategy].div+=calcDiv(t);});
+  return e("div",null,
+    e("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:14,marginBottom:18}},
+      [{label:"Win Rate",value:wr!==null?wr+"%":"—",color:wr!==null&&wr>50?F.green:F.red},
+       {label:"W / L",value:winners+" / "+losers},
+       {label:"Options P&L",value:(totOptPnl>=0?"+":"-")+fmtD(totOptPnl),color:totOptPnl>=0?F.green:F.red},
+       {label:"Stock P&L",value:(totStkPnl>=0?"+":"-")+fmtD(totStkPnl),color:totStkPnl>=0?F.green:F.red},
+       {label:"Combined Total",value:(totAll>=0?"+":"-")+fmtD(totAll),color:totAll>=0?F.green:F.red},
+      ].map(c=>e("div",{key:c.label,style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:"14px 16px"}},
+        e("div",{style:{fontSize:11,color:F.textMuted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}},c.label),
+        e("div",{style:{fontSize:20,fontWeight:700,color:c.color||F.textPrimary}},c.value)
+      ))
+    ),
+    e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,overflow:"hidden"}},
+      e("div",{style:{padding:"10px 16px",background:"#e8ede8",borderBottom:`1px solid ${F.borderLight}`,fontWeight:700,fontSize:13}},"P&L by Strategy"),
+      e("table",{style:{width:"100%",borderCollapse:"collapse"}},
+        e("thead",null,e("tr",null,["Strategy","Type","Trades","P&L","Dividends","Combined"].map(h=>e("th",{key:h,style:thS},h)))),
+        e("tbody",null,Object.entries(byStrat).sort((a,b)=>(b[1].pnl+b[1].div)-(a[1].pnl+a[1].div)).map(([strat,d],i)=>{
+          const def2=gd(strat),comb=d.pnl+d.div;
+          return e("tr",{key:strat,style:{background:i%2===0?F.bgPanel:F.rowAlt,borderBottom:`1px solid ${F.borderLight}`}},
+            e("td",{style:tdS},strat),
+            e("td",{style:tdS},e("span",{style:{fontSize:11,fontWeight:600,color:def2.type==="buy"?F.blueLink:F.green}},def2.type==="buy"?"📈 Buy":"📉 Sell")),
+            e("td",{style:tdS},d.count),
+            e("td",{style:{...tdS,fontWeight:700,color:d.pnl>=0?F.green:F.red}},(d.pnl>=0?"+":"-")+fmtD(d.pnl)),
+            e("td",{style:{...tdS,color:F.purple}},d.div>0?"+"+fmtD(d.div):"—"),
+            e("td",{style:{...tdS,fontWeight:700,color:comb>=0?F.green:F.red}},(comb>=0?"+":"-")+fmtD(comb))
+          );
+        }))
+      )
+    )
+  );
+}
+
+// ─── Account Banner ───────────────────────────────────────────────────────────
+function Banner({trades,stocks,startBal,onSaveBal}) {
+  const [editing,setEditing]=useState(false);
+  const [balInput,setBalInput]=useState(startBal);
+  const {cash,stkMkt,total,divInc}=calcTotal(trades,stocks,startBal);
+  const vs=total-pN(startBal),vsPct=pN(startBal)>0?(vs/pN(startBal))*100:0;
+  const totPrem=trades.reduce((s,t)=>s+(t.premium&&gd(t.strategy).type==="sell"?pN(t.premium)*oq(t):0),0);
+  const stkCost=stocks.reduce((s,st)=>s+(pN(st.buyPrice)*(parseInt(st.shares)||0)),0);
+  return e("div",{style:{background:F.bgBanner,borderBottom:`2px solid ${F.green}`}},
+    e("div",{style:{maxWidth:1400,margin:"0 auto",padding:"0 20px"}},
+      e("div",{style:{display:"flex",alignItems:"center",gap:24,padding:"12px 0 10px",overflowX:"auto"}},
+        e("div",null,
+          e("div",{style:{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1,marginBottom:2}},"Total Account Value"),
+          e("div",{style:{display:"flex",alignItems:"baseline",gap:10}},
+            e("span",{style:{fontSize:34,fontWeight:800,color:"#fff",letterSpacing:-1}},fmtD(total)),
+            e("span",{style:{fontSize:13,fontWeight:700,color:vs>=0?"#4ade80":F.red}},(vs>=0?"▲":"▼")+" "+fmtD(vs)+" ("+(vs>=0?"+":"")+vsPct.toFixed(2)+"%)")
+          )
+        ),
+        e("div",{style:{width:1,height:44,background:"#1e3247",flexShrink:0}}),
+        e("div",null,
+          e("div",{style:{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1,marginBottom:2}},"Cash Balance"),
+          e("div",{style:{fontSize:18,fontWeight:700,color:"#a8c4d8"}},fmtD(cash))
+        ),
+        e("div",{style:{width:1,height:44,background:"#1e3247",flexShrink:0}}),
+        e("div",{style:{display:"flex",alignItems:"center",gap:6}},
+          e("span",{style:{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1}},"Starting:"),
+          editing?e("div",{style:{display:"flex",alignItems:"center",gap:4}},
+            e("input",{autoFocus:true,value:balInput,onChange:ev=>setBalInput(ev.target.value.replace(/[^0-9.]/g,"")),
+              onKeyDown:ev=>{if(ev.key==="Enter"){onSaveBal(balInput);setEditing(false);}if(ev.key==="Escape")setEditing(false);},
+              style:{background:"#1a2e3f",border:"1px solid #3a6a90",borderRadius:3,color:"#fff",fontSize:13,fontWeight:600,width:90,padding:"2px 6px",outline:"none"}}),
+            e("button",{onClick:()=>{onSaveBal(balInput);setEditing(false);},style:{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"2px 8px",fontSize:11,cursor:"pointer",fontWeight:700}},"✓"),
+            e("button",{onClick:()=>setEditing(false),style:{background:"transparent",color:"#8aafc5",border:"1px solid #3a5570",borderRadius:3,padding:"2px 6px",fontSize:11,cursor:"pointer"}},"✕")
+          ):e("button",{onClick:()=>{setBalInput(startBal);setEditing(true);},style:{background:"#1a2e3f",border:"1px solid #2a4a60",color:"#7a9ab5",borderRadius:3,padding:"3px 10px",fontSize:12,cursor:"pointer",fontWeight:600}},"$"+pN(startBal).toLocaleString()+" ✏")
+        ),
+        e("div",{style:{marginLeft:"auto",display:"flex",gap:24,alignItems:"center",flexShrink:0}},
+          stkMkt>0&&e("div",{style:{textAlign:"right"}},e("div",{style:{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1}},"Stock Value"),e("div",{style:{fontSize:15,fontWeight:700,color:"#a8c4d8"}},fmtD(stkMkt))),
+          divInc>0&&e("div",{style:{textAlign:"right"}},e("div",{style:{fontSize:10,color:"#5a7a95",textTransform:"uppercase",letterSpacing:1}},"Dividends"),e("div",{style:{fontSize:15,fontWeight:700,color:"#c4b5fd"}},"+"+fmtD(divInc)))
+        )
+      ),
+      e("div",{style:{borderTop:"1px solid #1a2e3f",padding:"5px 0",display:"flex",gap:20,fontSize:11,color:"#4a6a80",flexWrap:"wrap"}},
+        totPrem>0&&e("span",null,"Premium in: ",e("strong",{style:{color:"#6ee7b7"}},"+"+fmtD(totPrem))),
+        stkCost>0&&e("span",null,"Stock cost: ",e("strong",{style:{color:"#f87171"}},"-"+fmtD(stkCost))),
+        divInc>0&&e("span",null,"Dividends: ",e("strong",{style:{color:"#c4b5fd"}},"+"+fmtD(divInc))),
+        stkMkt>0&&e("span",null,"Holdings: ",e("strong",{style:{color:"#93c5fd"}},fmtD(stkMkt)))
+      )
+    )
+  );
+}
+
+// ─── Student Dashboard ────────────────────────────────────────────────────────
+function StudentDash({profile,onSignOut}) {
+  const [trades,setTrades]=useState([]);
+  const [stocks,setStocks]=useState([]);
+  const [startBal,setStartBal]=useState(profile.starting_balance?.toString()||"25000");
+  const [loading,setLoading]=useState(true);
+  const [tab,setTab]=useState("positions");
+  const [showTF,setShowTF]=useState(false);
+  const [editT,setEditT]=useState(null);
+  const [showSF,setShowSF]=useState(false);
+  const [editS,setEditS]=useState(null);
+  const [showReset,setShowReset]=useState(false);
+  const [saving,setSaving]=useState(false);
+
+  useEffect(()=>{load();},[]);
+  async function load(){
+    setLoading(true);
+    const[tr,st]=await Promise.all([
+      sb.from("trades").select("*").eq("user_id",profile.id).order("created_at",{ascending:false}),
+      sb.from("stocks").select("*").eq("user_id",profile.id).order("created_at",{ascending:false}),
+    ]);
+    setTrades((tr.data||[]).map(rtr));
+    setStocks((st.data||[]).map(rts));
+    setLoading(false);
+  }
+  const addT=async f=>{setSaving(true);const{data,err}=await sb.from("trades").insert(ttr(f,profile.id)).select().single();if(!err&&data){setTrades(p=>[rtr(data),...p]);setShowTF(false);}setSaving(false);};
+  const saveT=async f=>{setSaving(true);await sb.from("trades").update(ttr(f,profile.id)).eq("id",f.id);setTrades(p=>p.map(r=>r.id===f.id?f:r));setEditT(null);setSaving(false);};
+  const delT=async id=>{if(!window.confirm("Remove this trade?"))return;await sb.from("trades").delete().eq("id",id);setTrades(p=>p.filter(r=>r.id!==id));};
+  const updMark=async(id,cv)=>{setTrades(p=>p.map(r=>r.id===id?{...r,currentValue:cv}:r));await sb.from("trades").update({current_value:pN(cv)||null,updated_at:new Date().toISOString()}).eq("id",id);};
+  const addS=async f=>{setSaving(true);const{data,err}=await sb.from("stocks").insert(str(f,profile.id)).select().single();if(!err&&data){setStocks(p=>[rts(data),...p]);setShowSF(false);}setSaving(false);};
+  const saveS=async f=>{setSaving(true);await sb.from("stocks").update(str(f,profile.id)).eq("id",f.id);setStocks(p=>p.map(r=>r.id===f.id?f:r));setEditS(null);setSaving(false);};
+  const delS=async id=>{if(!window.confirm("Remove this position?"))return;await sb.from("stocks").delete().eq("id",id);setStocks(p=>p.filter(r=>r.id!==id));};
+  const reset=async()=>{setSaving(true);await Promise.all([sb.from("trades").delete().eq("user_id",profile.id),sb.from("stocks").delete().eq("user_id",profile.id)]);setTrades([]);setStocks([]);setShowReset(false);setSaving(false);};
+  const saveBal=async v=>{setStartBal(v);await sb.from("profiles").update({starting_balance:pN(v)||25000}).eq("id",profile.id);};
+
+  if(loading)return e("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:F.bgPage}},e(Spinner,{size:40}));
+
+  const tabs=[["positions","Positions"],["stocks","Stock Holdings"],["analytics","Summary & Analytics"]];
+  return e("div",{style:{minHeight:"100vh",background:F.bgPage}},
+    e(Banner,{trades,stocks,startBal,onSaveBal:saveBal}),
+    // Top Nav
+    e("div",{style:{background:F.bgHeader}},
+      e("div",{style:{maxWidth:1400,margin:"0 auto",padding:"0 16px",display:"flex",alignItems:"center",height:46,gap:10}},
+        e("div",{style:{display:"flex",alignItems:"center",gap:8,marginRight:8}},
+          e("div",{style:{width:26,height:26,borderRadius:"50%",background:F.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}},"📈"),
+          e("span",{style:{fontWeight:700,fontSize:14,color:"#fff",whiteSpace:"nowrap"}},"Options Learning Platform"),
+          e("span",{style:{fontSize:10,background:"#2a4055",borderRadius:2,padding:"2px 6px",color:"#7a9ab5"}},"PAPER TRADING")
+        ),
+        e("span",{style:{fontSize:12,color:"#8aafc5"}},profile.full_name||profile.email),
+        e("div",{style:{marginLeft:"auto",display:"flex",gap:8}},
+          e("button",{onClick:()=>setShowReset(true),style:{background:"none",border:"1px solid #4a6a80",color:"#8aafc5",borderRadius:3,padding:"5px 10px",fontSize:12,cursor:"pointer"}},"↺ Reset"),
+          e("button",{onClick:onSignOut,style:{background:"#1a2e3f",border:"1px solid #2a4a60",color:"#8aafc5",borderRadius:3,padding:"5px 12px",fontSize:12,cursor:"pointer"}},"Sign Out")
+        )
+      )
+    ),
+    // Sub Nav
+    e("div",{style:{background:F.bgSubHeader,borderBottom:`2px solid ${F.green}`}},
+      e("div",{style:{maxWidth:1400,margin:"0 auto",padding:"0 20px",display:"flex"}},
+        tabs.map(([k,label])=>e("button",{key:k,onClick:()=>setTab(k),style:{background:"none",border:"none",color:tab===k?"#fff":"#8aafc5",fontSize:13,padding:"10px 18px",cursor:"pointer",borderBottom:tab===k?`3px solid ${F.green}`:"3px solid transparent",fontWeight:tab===k?700:400,marginBottom:-2}},label))
+      )
+    ),
+    // Content
+    e("div",{style:{maxWidth:1400,margin:"0 auto",padding:"16px 20px"}},
+      tab==="positions"&&e(PositionsTab,{trades,onEdit:t=>setEditT(t),onDelete:delT,onAdd:()=>setShowTF(true),updMark}),
+      tab==="stocks"&&e(StockTab,{stocks,trades,onAdd:()=>setShowSF(true),onEdit:s=>setEditS(s),onDelete:delS}),
+      tab==="analytics"&&e(AnalyticsTab,{trades,stocks})
+    ),
+    // Modals
+    (showTF||editT)&&e(TradeForm,{initial:editT||undefined,onSave:editT?saveT:addT,onCancel:()=>{setShowTF(false);setEditT(null);},saving}),
+    (showSF||editS)&&e(StockForm,{initial:editS||undefined,trades,onSave:editS?saveS:addS,onCancel:()=>{setShowSF(false);setEditS(null);},saving}),
+    showReset&&e(Modal,{title:"Reset Account",onClose:()=>setShowReset(false)},
+      e("div",{style:{padding:20}},
+        e("div",{style:{fontSize:13,color:F.textSecond,marginBottom:14}},`Delete all ${trades.length} trades and ${stocks.length} stock positions? Cannot be undone.`),
+        e("div",{style:{display:"flex",gap:10,justifyContent:"flex-end"}},
+          e("button",{onClick:()=>setShowReset(false),style:{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"8px 20px",fontSize:13,cursor:"pointer"}},"Cancel"),
+          e("button",{onClick:reset,disabled:saving,style:{background:F.red,color:"#fff",border:"none",borderRadius:3,padding:"8px 20px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}},saving&&e(Spinner,{size:14}),"Yes, Reset")
+        )
+      )
+    )
+  );
+}
+
+// ─── Read-only student view ───────────────────────────────────────────────────
+function ReadOnlyView({student,onBack}) {
+  const {trades,stocks,startBal,profile}=student;
+  const {total}=calcTotal(trades,stocks,startBal);
+  const [tab,setTab]=useState("positions");
+  return e("div",{style:{minHeight:"100vh",background:F.bgPage}},
+    e("div",{style:{background:F.bgBanner,borderBottom:`2px solid ${F.gold}`}},
+      e("div",{style:{maxWidth:1400,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center",height:52,gap:12}},
+        e("button",{onClick:onBack,style:{background:"#1a2e3f",border:`1px solid ${F.gold}`,color:F.gold,borderRadius:3,padding:"5px 12px",fontSize:12,cursor:"pointer",fontWeight:600}},"← Back to Leaderboard"),
+        e("span",{style:{fontWeight:700,fontSize:15,color:"#fff"}},profile.full_name||profile.email),
+        e("span",{style:{fontSize:11,background:"#2a3a1a",borderRadius:3,padding:"2px 8px",color:F.gold}},"READ ONLY"),
+        e("div",{style:{marginLeft:"auto",display:"flex",gap:24}},
+          e("div",{style:{textAlign:"right"}},e("div",{style:{fontSize:10,color:"#5a7a95",textTransform:"uppercase"}},"Account Value"),e("div",{style:{fontSize:22,fontWeight:800,color:"#fff"}},fmtD(total))),
+          e("div",{style:{textAlign:"right"}},e("div",{style:{fontSize:10,color:"#5a7a95",textTransform:"uppercase"}},"P&L"),e("div",{style:{fontSize:18,fontWeight:700,color:(total-pN(startBal))>=0?"#4ade80":F.red}},(total-pN(startBal))>=0?"+":"-"+fmtD(total-pN(startBal))))
+        )
+      )
+    ),
+    e("div",{style:{background:F.bgSubHeader,borderBottom:`2px solid ${F.gold}`}},
+      e("div",{style:{maxWidth:1400,margin:"0 auto",padding:"0 20px",display:"flex"}},
+        [["positions","Positions"],["stocks","Stock Holdings"],["analytics","Analytics"]].map(([k,l])=>e("button",{key:k,onClick:()=>setTab(k),style:{background:"none",border:"none",color:tab===k?"#fff":"#8aafc5",fontSize:13,padding:"10px 18px",cursor:"pointer",borderBottom:tab===k?`3px solid ${F.gold}`:"3px solid transparent",fontWeight:tab===k?700:400,marginBottom:-2}},l))
+      )
+    ),
+    e("div",{style:{maxWidth:1400,margin:"0 auto",padding:"16px 20px"}},
+      tab==="positions"&&e(PositionsTab,{trades,readOnly:true}),
+      tab==="stocks"&&e(StockTab,{stocks,trades,readOnly:true}),
+      tab==="analytics"&&e(AnalyticsTab,{trades,stocks})
+    )
+  );
+}
+
+// ─── Teacher Dashboard ────────────────────────────────────────────────────────
+function TeacherDash({profile,onSignOut}) {
+  const [classes,setClasses]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [activeClass,setActiveClass]=useState(null);
+  const [students,setStudents]=useState([]);
+  const [studLoading,setStudLoading]=useState(false);
+  const [showCreate,setShowCreate]=useState(false);
+  const [newName,setNewName]=useState("");
+  const [newBal,setNewBal]=useState("25000");
+  const [creating,setCreating]=useState(false);
+  const [viewStudent,setViewStudent]=useState(null);
+  const [confirmReset,setConfirmReset]=useState(null);
+  const [resetting,setResetting]=useState(false);
+  const [editCls,setEditCls]=useState(null);
+  const [editName,setEditName]=useState("");
+  const [editBal,setEditBal]=useState("");
+  const [editSaving,setEditSaving]=useState(false);
+  const [confirmDel,setConfirmDel]=useState(false);
+  const [confirmRegen,setConfirmRegen]=useState(false);
+  const [newCode,setNewCode]=useState(null);
+
+  useEffect(()=>{loadClasses();},[]);
+  const loadClasses=async()=>{setLoading(true);const{data}=await sb.from("classes").select("*").eq("teacher_id",profile.id).order("created_at",{ascending:false});setClasses(data||[]);setLoading(false);};
+  const loadStudents=async cls=>{
+    setActiveClass(cls);setStudLoading(true);setNewCode(null);
+    const{data:profs}=await sb.from("profiles").select("*").eq("class_id",cls.id);
+    if(!profs?.length){setStudents([]);setStudLoading(false);return;}
+    const ids=profs.map(p=>p.id);
+    const[{data:trs},{data:stks}]=await Promise.all([sb.from("trades").select("*").in("user_id",ids),sb.from("stocks").select("*").in("user_id",ids)]);
+    const result=profs.map(p=>{
+      const t=(trs||[]).filter(x=>x.user_id===p.id).map(rtr);
+      const s=(stks||[]).filter(x=>x.user_id===p.id).map(rts);
+      const bal=pN(p.starting_balance||cls.starting_balance||25000);
+      const{total}=calcTotal(t,s,bal.toString());
+      const pnl=total-bal;
+      const win=t.filter(x=>(calcPnl(x)||0)>0).length;
+      return{profile:p,trades:t,stocks:s,total,pnl,startBal:bal.toString(),winRate:t.length>0?Math.round((win/t.length)*100):null,openCount:t.filter(x=>x.status==="Open").length,tradeCount:t.length};
+    }).sort((a,b)=>b.total-a.total);
+    setStudents(result);setStudLoading(false);
+  };
+  const createClass=async()=>{if(!newName.trim())return;setCreating(true);const code=genCode();const{error}=await sb.from("classes").insert({teacher_id:profile.id,name:newName.trim(),class_code:code,starting_balance:pN(newBal)||25000});if(!error){setShowCreate(false);setNewName("");setNewBal("25000");await loadClasses();}else alert(error.message);setCreating(false);};
+  const saveEditCls=async()=>{setEditSaving(true);await sb.from("classes").update({name:editName.trim(),starting_balance:pN(editBal)||25000}).eq("id",editCls.id);const u={...editCls,name:editName.trim(),starting_balance:pN(editBal)||25000};setClasses(p=>p.map(c=>c.id===u.id?u:c));if(activeClass?.id===u.id)setActiveClass(u);setEditCls(null);setEditSaving(false);};
+  const regenCode=async()=>{setEditSaving(true);const code=genCode();await sb.from("classes").update({class_code:code}).eq("id",editCls.id);setNewCode(code);setClasses(p=>p.map(c=>c.id===editCls.id?{...c,class_code:code}:c));if(activeClass?.id===editCls.id)setActiveClass(prev=>({...prev,class_code:code}));setConfirmRegen(false);setEditSaving(false);};
+  const deleteCls=async()=>{setEditSaving(true);await sb.from("classes").delete().eq("id",editCls.id);setClasses(p=>p.filter(c=>c.id!==editCls.id));if(activeClass?.id===editCls.id){setActiveClass(null);setStudents([]);}setEditCls(null);setEditSaving(false);};
+  const resetStudent=async s=>{setResetting(true);await Promise.all([sb.from("trades").delete().eq("user_id",s.profile.id),sb.from("stocks").delete().eq("user_id",s.profile.id)]);setConfirmReset(null);await loadStudents(activeClass);setResetting(false);};
+  const resetAll=async()=>{setResetting(true);for(const s of students){await Promise.all([sb.from("trades").delete().eq("user_id",s.profile.id),sb.from("stocks").delete().eq("user_id",s.profile.id)]);}setConfirmReset(null);await loadStudents(activeClass);setResetting(false);};
+
+  if(viewStudent)return e(ReadOnlyView,{student:viewStudent,onBack:()=>setViewStudent(null)});
+
+  return e("div",{style:{minHeight:"100vh",background:F.bgPage}},
+    e("div",{style:{background:F.bgBanner,borderBottom:`2px solid ${F.green}`}},
+      e("div",{style:{maxWidth:1200,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center",height:56,gap:12}},
+        e("div",{style:{width:30,height:30,borderRadius:"50%",background:F.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}},"📈"),
+        e("span",{style:{fontWeight:800,fontSize:16,color:"#fff"}},"Options Learning Platform"),
+        e("span",{style:{fontSize:11,background:"#1a3a5c",borderRadius:3,padding:"2px 8px",color:"#7dd3a8"}},"TEACHER"),
+        e("div",{style:{marginLeft:"auto",display:"flex",alignItems:"center",gap:12}},
+          e("span",{style:{fontSize:13,color:"#a8c4d8"}},profile.full_name||profile.email),
+          e("button",{onClick:onSignOut,style:{background:"#1a2e3f",border:"1px solid #2a4a60",color:"#8aafc5",borderRadius:3,padding:"5px 12px",fontSize:12,cursor:"pointer"}},"Sign Out")
+        )
+      )
+    ),
+    e("div",{style:{maxWidth:1200,margin:"0 auto",padding:24}},
+      e("div",{style:{display:"grid",gridTemplateColumns:"300px 1fr",gap:24}},
+        // Left sidebar
+        e("div",null,
+          e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}},
+            e("h2",{style:{fontSize:16,fontWeight:700}},"My Classes"),
+            e("button",{onClick:()=>setShowCreate(true),style:{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer"}},"+ New Class")
+          ),
+          loading?e("div",{style:{textAlign:"center",padding:40}},e(Spinner,{size:24})):
+          classes.length===0?e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:32,textAlign:"center",color:F.textMuted}},"No classes yet. Click + New Class."):
+          e("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+            classes.map(cls=>e("div",{key:cls.id,onClick:()=>loadStudents(cls),style:{background:activeClass?.id===cls.id?"#f0f7f0":F.bgPanel,border:`1px solid ${activeClass?.id===cls.id?F.green:F.borderLight}`,borderRadius:4,padding:"12px 14px",cursor:"pointer",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}},
+              e("div",{style:{fontWeight:700,fontSize:14,marginBottom:6}},cls.name),
+              e("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:6}},
+                e("span",{style:{fontFamily:"monospace",fontSize:18,fontWeight:800,color:F.green,letterSpacing:3}},cls.class_code),
+                e("button",{onClick:ev=>{ev.stopPropagation();navigator.clipboard?.writeText(cls.class_code);},style:{background:"none",border:`1px solid ${F.green}`,color:F.green,borderRadius:3,padding:"2px 7px",fontSize:10,cursor:"pointer"}},"Copy")
+              ),
+              e("div",{style:{fontSize:11,color:F.textMuted,marginBottom:8}},"Starting: $"+pN(cls.starting_balance).toLocaleString()),
+              e("button",{onClick:ev=>{ev.stopPropagation();setEditCls(cls);setEditName(cls.name);setEditBal(cls.starting_balance?.toString()||"25000");setConfirmDel(false);setConfirmRegen(false);setNewCode(null);},style:{background:F.blueLinkLight,border:`1px solid ${F.blueLink}`,color:F.blueLink,borderRadius:3,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}},"⚙ Settings")
+            ))
+          )
+        ),
+        // Right leaderboard
+        e("div",null,
+          !activeClass?e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:60,textAlign:"center",color:F.textMuted}},
+            e("div",{style:{fontSize:32,marginBottom:12}},"📊"),
+            e("div",{style:{fontWeight:600,fontSize:16,marginBottom:6}},"Select a class"),
+            e("div",{style:{fontSize:13}},"Click a class on the left to see the leaderboard.")
+          ):e("div",null,
+            e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}},
+              e("h2",{style:{fontSize:16,fontWeight:700}},activeClass.name+" — Leaderboard"),
+              e("button",{onClick:()=>setConfirmReset("all"),style:{background:"none",border:`1px solid ${F.gold}`,color:F.gold,borderRadius:3,padding:"5px 12px",fontSize:12,cursor:"pointer",fontWeight:600}},"↺ Reset All")
+            ),
+            studLoading?e("div",{style:{textAlign:"center",padding:60}},e(Spinner,{size:28})):
+            students.length===0?e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,padding:40,textAlign:"center",color:F.textMuted}},
+              e("div",{style:{fontWeight:600,marginBottom:8}},"No students yet."),
+              e("div",{style:{fontSize:13}},"Share code: ",e("strong",{style:{color:F.green,fontFamily:"monospace",letterSpacing:3,fontSize:16}},activeClass.class_code))
+            ):
+            e("div",{style:{background:F.bgPanel,border:`1px solid ${F.borderLight}`,borderRadius:4,overflow:"auto"}},
+              e("table",{style:{width:"100%",borderCollapse:"collapse"}},
+                e("thead",null,e("tr",null,["Rank","Student","Account Value","P&L","Win Rate","Trades","Open","Actions"].map(h=>e("th",{key:h,style:thS},h)))),
+                e("tbody",null,students.map((s,i)=>e("tr",{key:s.profile.id,style:{background:i===0?"#f0fff4":i%2===0?F.bgPanel:F.rowAlt,borderBottom:`1px solid ${F.borderLight}`}},
+                  e("td",{style:{...tdS,textAlign:"center",fontWeight:700,fontSize:16,color:i===0?F.green:F.textMuted}},i===0?"🥇":i===1?"🥈":i===2?"🥉":i+1),
+                  e("td",{style:tdS},e("div",{style:{fontWeight:600}},s.profile.full_name||s.profile.email),e("div",{style:{fontSize:10,color:F.textMuted}},s.profile.email)),
+                  e("td",{style:{...tdS,fontWeight:700,fontSize:14}},fmtD(s.total)),
+                  e("td",{style:{...tdS,fontWeight:700,color:s.pnl>=0?F.green:F.red}},(s.pnl>=0?"+":"-")+fmtD(s.pnl)),
+                  e("td",{style:{...tdS,color:s.winRate===null?F.textMuted:s.winRate>50?F.green:F.red,fontWeight:s.winRate!==null?700:400}},s.winRate!==null?s.winRate+"%":"—"),
+                  e("td",{style:tdS},s.tradeCount),
+                  e("td",{style:tdS},s.openCount),
+                  e("td",{style:{...tdS,textAlign:"center"}},
+                    e("div",{style:{display:"flex",gap:6,justifyContent:"center"}},
+                      e("button",{onClick:()=>setViewStudent(s),style:{background:F.blueLinkLight,border:`1px solid ${F.blueLink}`,color:F.blueLink,borderRadius:3,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}},"View"),
+                      e("button",{onClick:()=>setConfirmReset(s),style:{background:"none",border:`1px solid ${F.red}`,color:F.red,borderRadius:3,padding:"3px 8px",fontSize:11,cursor:"pointer"}},"Reset")
+                    )
+                  )
+                )))
+              )
+            )
+          )
+        )
+      )
+    ),
+    // Create class modal
+    showCreate&&e(Modal,{title:"Create New Class",onClose:()=>setShowCreate(false),width:400},
+      e("div",{style:{padding:20}},
+        e("div",{style:{marginBottom:12}},e(FField,{label:"Class Name",value:newName,onChange:setNewName,placeholder:"e.g. Period 3 — Finance",autoFocus:true})),
+        e("div",{style:{marginBottom:20}},e(FField,{label:"Starting Balance ($)",value:newBal,onChange:setNewBal,placeholder:"25000"})),
+        e("div",{style:{display:"flex",gap:10}},
+          e("button",{onClick:createClass,disabled:creating,style:{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"8px 20px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}},creating&&e(Spinner,{size:14}),"Create Class"),
+          e("button",{onClick:()=>setShowCreate(false),style:{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"8px 16px",fontSize:13,cursor:"pointer"}},"Cancel")
+        )
+      )
+    ),
+    // Edit class modal
+    editCls&&e(Modal,{title:"Class Settings — "+editCls.name,onClose:()=>setEditCls(null),width:480},
+      e("div",{style:{padding:20}},
+        newCode&&e("div",{style:{background:F.greenLight,border:`1px solid ${F.greenBorder}`,borderRadius:3,padding:"10px 14px",marginBottom:14,fontSize:13}},"✓ New code: ",e("strong",{style:{color:F.green,letterSpacing:2,fontSize:16}},newCode)),
+        e("div",{style:{marginBottom:12}},e(FField,{label:"Class Name",value:editName,onChange:setEditName})),
+        e("div",{style:{marginBottom:16}},e(FField,{label:"Starting Balance ($)",value:editBal,onChange:setEditBal})),
+        e("div",{style:{display:"flex",gap:10,marginBottom:20}},
+          e("button",{onClick:saveEditCls,disabled:editSaving,style:{background:F.green,color:"#fff",border:"none",borderRadius:3,padding:"8px 20px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}},editSaving&&e(Spinner,{size:14}),"Save"),
+          e("button",{onClick:()=>setEditCls(null),style:{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"8px 16px",fontSize:13,cursor:"pointer"}},"Cancel")
+        ),
+        e("div",{style:{borderTop:`1px solid ${F.borderLight}`,paddingTop:14,display:"flex",gap:10,flexWrap:"wrap"}},
+          !confirmRegen?e("button",{onClick:()=>setConfirmRegen(true),style:{background:"none",border:`1px solid ${F.gold}`,color:F.gold,borderRadius:3,padding:"6px 14px",fontSize:12,cursor:"pointer",fontWeight:600}},"🔄 New Class Code"):
+          e("div",{style:{background:F.goldLight,border:"1px solid #ffe08a",borderRadius:3,padding:"8px 12px",fontSize:12,display:"flex",gap:8,alignItems:"center"}},
+            e("span",null,"Old code stops working. Continue?"),
+            e("button",{onClick:regenCode,disabled:editSaving,style:{background:F.gold,color:"#fff",border:"none",borderRadius:3,padding:"3px 10px",fontSize:12,cursor:"pointer",fontWeight:700}},"Yes"),
+            e("button",{onClick:()=>setConfirmRegen(false),style:{background:"none",border:"none",cursor:"pointer",color:F.textSecond,fontSize:12}},"Cancel")
+          ),
+          !confirmDel?e("button",{onClick:()=>setConfirmDel(true),style:{background:"none",border:`1px solid ${F.red}`,color:F.red,borderRadius:3,padding:"6px 14px",fontSize:12,cursor:"pointer",fontWeight:600}},"🗑 Delete Class"):
+          e("div",{style:{background:F.redLight,border:"1px solid #ffb3b3",borderRadius:3,padding:"8px 12px",fontSize:12,display:"flex",gap:8,alignItems:"center"}},
+            e("span",null,"Delete ",e("strong",null,editCls.name),"? Cannot be undone."),
+            e("button",{onClick:deleteCls,disabled:editSaving,style:{background:F.red,color:"#fff",border:"none",borderRadius:3,padding:"3px 10px",fontSize:12,cursor:"pointer",fontWeight:700}},"Delete"),
+            e("button",{onClick:()=>setConfirmDel(false),style:{background:"none",border:"none",cursor:"pointer",color:F.textSecond,fontSize:12}},"Cancel")
+          )
+        )
+      )
+    ),
+    // Confirm reset modal
+    confirmReset&&e(Modal,{title:"Confirm Reset",onClose:()=>setConfirmReset(null),headerBg:"#6b1a1a"},
+      e("div",{style:{padding:20}},
+        e("div",{style:{fontSize:13,color:F.textSecond,marginBottom:14}},
+          confirmReset==="all"?`Reset ALL ${students.length} students in "${activeClass.name}"? All trades and stocks will be deleted.`:`Reset ${confirmReset.profile.full_name||confirmReset.profile.email}? All their trades and stocks will be deleted.`
+        ),
+        e("div",{style:{display:"flex",gap:10,justifyContent:"flex-end"}},
+          e("button",{onClick:()=>setConfirmReset(null),style:{background:F.white,color:F.textSecond,border:`1px solid ${F.borderMid}`,borderRadius:3,padding:"8px 16px",fontSize:13,cursor:"pointer"}},"Cancel"),
+          e("button",{onClick:()=>confirmReset==="all"?resetAll():resetStudent(confirmReset),disabled:resetting,style:{background:F.red,color:"#fff",border:"none",borderRadius:3,padding:"8px 20px",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8}},resetting&&e(Spinner,{size:14}),"Yes, Reset")
+        )
+      )
+    )
+  );
+}
+
+// ─── Auth Screen ──────────────────────────────────────────────────────────────
+function AuthScreen({onAuth}) {
+  const [mode,setMode]=useState("login");
+  const [role,setRole]=useState("student");
+  const [email,setEmail]=useState("");
+  const [password,setPassword]=useState("");
+  const [name,setName]=useState("");
+  const [classCode,setClassCode]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+  const [success,setSuccess]=useState(null);
+  const [forgotMode,setForgotMode]=useState(false);
+  const [forgotEmail,setForgotEmail]=useState("");
+  const [forgotSent,setForgotSent]=useState(false);
+
+  const authInp={...inp,background:"#1a2e3f",border:"1px solid #2a4a60",color:"#fff",padding:"9px 12px",fontSize:14};
+
+  const login=async ev=>{
+    ev.preventDefault();setLoading(true);setError(null);
+    const{data,error:err}=await sb.auth.signInWithPassword({email,password});
+    if(err){setError(err.message);setLoading(false);return;}
+    const{data:prof}=await sb.from("profiles").select("*").eq("id",data.user.id).single();
+    onAuth(prof);setLoading(false);
+  };
+  const signup=async ev=>{
+    ev.preventDefault();setLoading(true);setError(null);
+    let classId=null,startingBal=25000;
+    if(role==="student"){
+      if(!classCode.trim()){setError("Enter the class code from your teacher.");setLoading(false);return;}
+      const{data:cls}=await sb.from("classes").select("*").eq("class_code",classCode.trim().toUpperCase()).single();
+      if(!cls){setError("Invalid class code. Check with your teacher.");setLoading(false);return;}
+      classId=cls.id;startingBal=cls.starting_balance||25000;
+    }
+    const{data,error:err}=await sb.auth.signUp({email,password,options:{data:{full_name:name}}});
+    if(err){setError(err.message);setLoading(false);return;}
+    if(data.user){
+      await sb.from("profiles").update({full_name:name.trim()||null,role,class_id:classId,starting_balance:startingBal}).eq("id",data.user.id);
+      const{data:prof}=await sb.from("profiles").select("*").eq("id",data.user.id).single();
+      if(prof){onAuth(prof);setLoading(false);return;}
+    }
+    setSuccess("Account created! Check your email to confirm, then sign in.");
+    setLoading(false);
+  };
+  const sendForgot=async ev=>{ev.preventDefault();setLoading(true);await sb.auth.resetPasswordForEmail(forgotEmail);setForgotSent(true);setLoading(false);};
+
+  return e("div",{style:{minHeight:"100vh",background:F.bgBanner,display:"flex",alignItems:"center",justifyContent:"center",padding:20}},
+    e("div",{style:{width:"100%",maxWidth:420}},
+      e("div",{style:{textAlign:"center",marginBottom:32}},
+        e("div",{style:{width:56,height:56,borderRadius:"50%",background:F.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 12px"}},"📈"),
+        e("h1",{style:{color:"#fff",fontSize:24,fontWeight:800,marginBottom:4}},"Options Learning Platform"),
+        e("p",{style:{color:"#5a7a95",fontSize:14}},"Paper trading for the classroom")
+      ),
+      e("div",{style:{background:"#131f2a",border:"1px solid #1e3247",borderRadius:8,overflow:"hidden",boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}},
+        forgotMode?e("div",{style:{padding:24}},
+          !forgotSent?e("div",null,
+            e("div",{style:{fontWeight:700,color:"#fff",marginBottom:12,fontSize:15}},"Reset Password"),
+            e("form",{onSubmit:sendForgot},
+              e("div",{style:{marginBottom:16}},e(FLabel,null,"Email"),e("input",{type:"email",value:forgotEmail,onChange:ev=>setForgotEmail(ev.target.value),placeholder:"you@example.com",style:authInp})),
+              e("button",{type:"submit",disabled:loading,style:{width:"100%",background:F.green,color:"#fff",border:"none",borderRadius:4,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}},loading&&e(Spinner,{size:14}),"Send Reset Email")
+            )
+          ):e("div",{style:{textAlign:"center",padding:"16px 0"}},
+            e("div",{style:{fontSize:32,marginBottom:12}},"📧"),
+            e("div",{style:{color:"#86efac",fontWeight:700,marginBottom:8}},"Email sent!"),
+            e("div",{style:{color:"#5a7a95",fontSize:13}},"Check your inbox for the reset link.")
+          ),
+          e("button",{onClick:()=>{setForgotMode(false);setForgotSent(false);},style:{marginTop:16,background:"none",border:"none",color:"#5a7a95",fontSize:13,cursor:"pointer",width:"100%",textAlign:"center"}},"← Back to Sign In")
+        ):e("div",null,
+          e("div",{style:{display:"flex",borderBottom:"1px solid #1e3247"}},
+            [["login","Sign In"],["signup","Sign Up"]].map(([m,label])=>e("button",{key:m,onClick:()=>{setMode(m);setError(null);setSuccess(null);},style:{flex:1,background:mode===m?"#1a2e3f":"transparent",border:"none",color:mode===m?"#fff":"#5a7a95",padding:"14px 0",fontSize:14,cursor:"pointer",fontWeight:mode===m?700:400,borderBottom:mode===m?`2px solid ${F.green}`:"2px solid transparent"}},label))
+          ),
+          e("div",{style:{padding:24}},
+            error&&e("div",{style:{background:"#2a1a1a",border:"1px solid #cc3333",borderRadius:4,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#ff9999"}},error),
+            success&&e("div",{style:{background:"#1a2a1a",border:`1px solid ${F.green}`,borderRadius:4,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#86efac"}},success),
+            mode==="login"?e("form",{onSubmit:login},
+              e("div",{style:{marginBottom:14}},e(FLabel,null,"Email"),e("input",{type:"email",value:email,onChange:ev=>setEmail(ev.target.value),placeholder:"you@example.com",style:authInp})),
+              e("div",{style:{marginBottom:8}},e(FLabel,null,"Password"),e("input",{type:"password",value:password,onChange:ev=>setPassword(ev.target.value),placeholder:"••••••••",style:authInp})),
+              e("div",{style:{textAlign:"right",marginBottom:20}},e("button",{type:"button",onClick:()=>{setForgotMode(true);setForgotEmail(email);},style:{background:"none",border:"none",color:"#5a7a95",fontSize:12,cursor:"pointer"}},"Forgot password?")),
+              e("button",{type:"submit",disabled:loading,style:{width:"100%",background:F.green,color:"#fff",border:"none",borderRadius:4,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}},loading&&e(Spinner,{size:14}),"Sign In")
+            ):e("form",{onSubmit:signup},
+              e("div",{style:{marginBottom:16}},
+                e(FLabel,null,"I am a"),
+                e("div",{style:{display:"flex",border:"1px solid #2a4a60",borderRadius:4,overflow:"hidden"}},
+                  [["student","🎓 Student"],["teacher","👨‍🏫 Teacher"]].map(([r,label])=>e("button",{key:r,type:"button",onClick:()=>setRole(r),style:{flex:1,background:role===r?F.bgSubHeader:"transparent",border:"none",color:role===r?"#fff":"#5a7a95",padding:"10px 0",fontSize:13,cursor:"pointer",fontWeight:role===r?700:400}},label))
+                )
+              ),
+              e("div",{style:{marginBottom:12}},e(FLabel,null,"Full Name"),e("input",{value:name,onChange:ev=>setName(ev.target.value),placeholder:"Your name",style:authInp})),
+              e("div",{style:{marginBottom:12}},e(FLabel,null,"Email"),e("input",{type:"email",value:email,onChange:ev=>setEmail(ev.target.value),placeholder:"you@example.com",style:authInp})),
+              e("div",{style:{marginBottom:12}},e(FLabel,null,"Password"),e("input",{type:"password",value:password,onChange:ev=>setPassword(ev.target.value),placeholder:"At least 6 characters",style:authInp})),
+              role==="student"&&e("div",{style:{marginBottom:12}},
+                e(FLabel,null,"Class Code"),
+                e("input",{value:classCode,onChange:ev=>setClassCode(ev.target.value.toUpperCase()),placeholder:"e.g. FIN3A7",style:{...authInp,fontFamily:"monospace",letterSpacing:2,fontSize:15,fontWeight:700}}),
+                e("div",{style:{fontSize:11,color:"#5a7a95",marginTop:4}},"Get this from your teacher.")
+              ),
+              e("div",{style:{height:8}}),
+              e("button",{type:"submit",disabled:loading,style:{width:"100%",background:F.green,color:"#fff",border:"none",borderRadius:4,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}},loading&&e(Spinner,{size:14}),"Create Account")
+            )
+          )
+        )
+      ),
+      e("p",{style:{textAlign:"center",color:"#3a5a70",fontSize:12,marginTop:20}},"Paper Trading Only — Educational purposes only.")
+    )
+  );
+}
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
+function App() {
+  const [profile,setProfile]=useState(null);
+  const [checking,setChecking]=useState(true);
+  useEffect(()=>{
+    sb.auth.getSession().then(async({data:{session}})=>{
+      if(session){const{data:p}=await sb.from("profiles").select("*").eq("id",session.user.id).single();setProfile(p||null);}
+      setChecking(false);
+    });
+    const{data:{subscription}}=sb.auth.onAuthStateChange(async(event,session)=>{
+      if(!session){setProfile(null);return;}
+      if(event==="SIGNED_IN"){const{data:p}=await sb.from("profiles").select("*").eq("id",session.user.id).single();setProfile(p||null);}
+    });
+    return()=>subscription.unsubscribe();
+  },[]);
+  const signOut=async()=>{await sb.auth.signOut();setProfile(null);};
+  if(checking)return e("div",{style:{minHeight:"100vh",background:F.bgBanner,display:"flex",alignItems:"center",justifyContent:"center"}},e(Spinner,{size:40}));
+  if(!profile)return e(AuthScreen,{onAuth:setProfile});
+  if(profile.role==="teacher"||profile.role==="admin")return e(TeacherDash,{profile,onSignOut:signOut});
+  return e(StudentDash,{profile,onSignOut:signOut});
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(e(App));
+</script>
+</body>
+</html>
